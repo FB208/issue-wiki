@@ -131,7 +131,6 @@ class TaskCommentOut(OrmModel):
     user_id: int | None
     user_nickname: str
     content: str
-    is_confirmed: bool
     admin_reply: str | None
     github_comment_id: int | None = None
     github_author_login: str | None = None
@@ -228,7 +227,6 @@ class DocumentCommentOut(OrmModel):
     user_id: int
     user_nickname: str
     content: str
-    is_confirmed: bool
     admin_reply: str | None
     created_at: datetime
     updated_at: datetime
@@ -240,7 +238,6 @@ class AdminCommentOut(BaseModel):
     target_id: int
     user: str
     content: str
-    is_confirmed: bool
     admin_reply: str | None
     created_at: datetime
 

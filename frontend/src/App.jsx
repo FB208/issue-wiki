@@ -35,7 +35,7 @@ const githubSyncOptions = [
   { value: "error", label: "同步失败" },
 ];
 
-const defaultStatuses = ["in_progress", "pending_start"];
+const defaultStatuses = statusOptions.map((item) => item.value);
 const defaultPageParams = { page: 1, page_size: 20 };
 const pageSizeOptions = [10, 20, 50];
 
@@ -323,7 +323,7 @@ function HomePage({ user, openAuth }) {
 
       <section className="panel">
         <div className="panel-head stacked">
-          <div><h2>任务列表</h2><p>默认展示进行中和待启动任务，前三名展示金银铜效果。</p></div>
+          <div><h2>任务列表</h2><p>默认展示所有公开任务，前三名展示金银铜效果。</p></div>
           <div className="filters">
             <input value={filters.name} placeholder="任务名称模糊查询" onChange={(event) => updateFilter({ name: event.target.value })} />
             <select value={filters.sort_by} onChange={(event) => updateFilter({ sort_by: event.target.value })}>
@@ -446,7 +446,7 @@ function DemandModal({ user, openAuth, close, onDone }) {
         <input placeholder="需求名称" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} />
         <MarkdownEditor value={form.description} onChange={(description) => setForm({ ...form, description })} user={user} openAuth={openAuth} fill />
         {error && <Notice type="error" message={error} />}
-        <div className="drawer-actions"><button type="button" className="btn" onClick={close}>取消</button><button className="btn primary" disabled={submitting} aria-busy={submitting}>{loadingText(submitting, "提交待审核需求", "提交中...")}</button></div>
+        <div className="drawer-actions"><button type="button" className="btn" onClick={close}>取消</button><button className="btn primary" disabled={submitting} aria-busy={submitting}>{loadingText(submitting, "提交需求", "提交中...")}</button></div>
       </form>
     </BottomDrawer>
   );
@@ -904,7 +904,7 @@ function AdminPage({ user, openAuth, refreshNav }) {
       const method = action === "delete" ? "DELETE" : "POST";
       await request(`/admin/comments/${target}/${id}${action === "delete" ? "" : `/${action}`}`, { method, body: body ? JSON.stringify(body) : undefined });
       await load();
-      notify(action === "delete" && target === "task" ? "评论已删除，GitHub 后台同步中" : { confirm: "评论已确认", reply: "回复已保存", delete: "评论已删除" }[action] || "操作已保存");
+      notify(action === "delete" && target === "task" ? "评论已删除，GitHub 后台同步中" : { reply: "回复已保存", delete: "评论已删除" }[action] || "操作已保存");
     }).catch((err) => setError(err.message));
   }
 
@@ -957,7 +957,7 @@ function AdminPage({ user, openAuth, refreshNav }) {
       </div>}
       {tab === "tasks" && <div className="panel admin-panel">
         <div className="panel-head">
-          <div><h2>任务管理</h2><p>审核通过的本地需求会自动同步到 GitHub issue。</p></div>
+          <div><h2>任务管理</h2><p>非 GitHub 来源任务从待审核改为其他状态后，会自动同步到 GitHub issue。</p></div>
           <div className="row-actions">
             <button className="btn primary" onClick={() => setTaskDrawerOpen(true)}>新增任务</button>
             <button className="btn" disabled={busy("admin-sync-github")} aria-busy={busy("admin-sync-github")} onClick={syncHistoricalIssues}>{loadingText(busy("admin-sync-github"), "同步历史任务", "同步中...")}</button>
@@ -1067,7 +1067,6 @@ function TaskAdminList({ tasks, updateTask, openDetail, busy }) {
   return (
     <div className="admin-list">
       {tasks.map((task) => {
-        const completed = task.status === "completed";
         const taskBusy = busy(`admin-update-task-${task.id}`);
         return (
           <div key={task.id} className="admin-row task-admin">
@@ -1076,7 +1075,6 @@ function TaskAdminList({ tasks, updateTask, openDetail, busy }) {
             <span>{task.github_issue_url ? <a href={task.github_issue_url} target="_blank" rel="noreferrer">Issue #{task.github_issue_number}</a> : "未同步"}</span>
             <span className={task.github_sync_error ? "sync-error" : "sync-ok"} title={task.github_sync_error || ""}>{task.github_sync_error ? "同步失败" : task.last_github_sync_at ? "已同步" : "待同步"}</span>
             <span>¥{task.start_amount} / ¥{task.donated_amount}</span>
-            <button className="btn" disabled={completed || taskBusy} aria-busy={taskBusy} onClick={() => updateTask(task, { status: "pending_start" })}>{completed ? "已完成" : loadingText(taskBusy, "通过", "保存中...")}</button>
             <button className="btn" disabled={taskBusy} aria-busy={taskBusy} onClick={() => updateTask(task, { is_hidden: !task.is_hidden })}>{loadingText(taskBusy, task.is_hidden ? "取消隐藏" : "隐藏", "保存中...")}</button>
             <select value={task.status} disabled={taskBusy} aria-busy={taskBusy} onChange={(event) => updateTask(task, { status: event.target.value })}>{statusOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select>
           </div>
@@ -1133,7 +1131,7 @@ function TaskDetailComment({ item }) {
   return (
     <article className="detail-comment">
       <div className="detail-comment-head">
-        <div><b>{item.user_nickname || item.user || "未知用户"}</b><span>{formatDate(item.created_at)} · {item.is_confirmed ? "已确认" : "未确认"}</span></div>
+        <div><b>{item.user_nickname || item.user || "未知用户"}</b><span>{formatDate(item.created_at)}</span></div>
         {item.github_comment_id && <span className="source-chip">GitHub #{item.github_comment_id}</span>}
       </div>
       <div className="detail-comment-body">
@@ -1154,10 +1152,9 @@ function sourceLabel(source) {
 function CommentAdminList({ comments, action, busy }) {
   const all = comments.map((item) => ({ ...item, label: `${item.target === "task" ? "任务" : "文档"} #${item.target_id}` }));
   return <div className="admin-list">{all.map((item) => {
-    const confirmBusy = busy(`admin-comment-${item.target}-${item.id}-confirm`);
     const replyBusy = busy(`admin-comment-${item.target}-${item.id}-reply`);
     const deleteBusy = busy(`admin-comment-${item.target}-${item.id}-delete`);
-    return <div key={`${item.target}-${item.id}`} className="admin-row comment-admin"><b>{item.label}</b><span>{item.user}</span><p>{item.content}</p>{item.target === "task" && <button className="btn" disabled={confirmBusy} aria-busy={confirmBusy} onClick={() => action(item.target, item.id, "confirm")}>{loadingText(confirmBusy, "确认", "处理中...")}</button>}<button className="btn" disabled={replyBusy} aria-busy={replyBusy} onClick={() => { if (busy(`admin-comment-${item.target}-${item.id}-reply`)) return; const admin_reply = prompt("回复内容", item.admin_reply || ""); if (admin_reply === null) return; action(item.target, item.id, "reply", { admin_reply }); }}>{loadingText(replyBusy, "回复", "保存中...")}</button><button className="btn danger" disabled={deleteBusy} aria-busy={deleteBusy} onClick={() => action(item.target, item.id, "delete")}>{loadingText(deleteBusy, "删除", "处理中...")}</button></div>;
+    return <div key={`${item.target}-${item.id}`} className="admin-row comment-admin"><b>{item.label}</b><span>{item.user}</span><p>{item.content}</p><button className="btn" disabled={replyBusy} aria-busy={replyBusy} onClick={() => { if (busy(`admin-comment-${item.target}-${item.id}-reply`)) return; const admin_reply = prompt("回复内容", item.admin_reply || ""); if (admin_reply === null) return; action(item.target, item.id, "reply", { admin_reply }); }}>{loadingText(replyBusy, "回复", "保存中...")}</button><button className="btn danger" disabled={deleteBusy} aria-busy={deleteBusy} onClick={() => action(item.target, item.id, "delete")}>{loadingText(deleteBusy, "删除", "处理中...")}</button></div>;
   })}</div>;
 }
 
@@ -1443,7 +1440,7 @@ function AuthModal({ close, onAuthed }) {
 }
 
 function Comment({ item }) {
-  return <article className="comment"><b>{item.user_nickname || item.user}</b><span>{formatDate(item.created_at)} {item.is_confirmed ? "已确认" : "未确认"}</span><CommentMarkdown content={item.content} />{item.admin_reply && <blockquote>管理员回复：{item.admin_reply}</blockquote>}</article>;
+  return <article className="comment"><b>{item.user_nickname || item.user}</b><span>{formatDate(item.created_at)}</span><CommentMarkdown content={item.content} />{item.admin_reply && <blockquote>管理员回复：{item.admin_reply}</blockquote>}</article>;
 }
 
 function CommentMarkdown({ content }) {

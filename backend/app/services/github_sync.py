@@ -21,6 +21,7 @@ STATUS_LABELS = {
     TaskStatus.in_progress.value: ("issue-wiki/status:in-progress", "059669"),
     TaskStatus.completed.value: ("issue-wiki/status:completed", "6b7280"),
 }
+STATUS_BY_LABEL = {label: status for status, (label, _) in STATUS_LABELS.items()}
 
 
 class GitHubSyncError(RuntimeError):
@@ -107,6 +108,10 @@ def apply_issue_mapping(task: Task, issue: dict[str, Any], repo: str) -> None:
 
 
 def status_from_github_issue(issue: dict[str, Any]) -> str:
+    for item in issue.get("labels") or []:
+        name = item.get("name") if isinstance(item, dict) else str(item)
+        if name in STATUS_BY_LABEL:
+            return STATUS_BY_LABEL[name]
     return TaskStatus.completed.value if issue.get("state") == "closed" else TaskStatus.pending_review.value
 
 
@@ -251,7 +256,6 @@ def upsert_comment_from_github(db: Session, task: Task, github_comment: dict[str
             user_id=None,
             content=github_comment.get("body") or "",
             github_author_login=comment_author_login(github_comment),
-            is_confirmed=False,
         )
         db.add(comment)
         created = True

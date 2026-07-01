@@ -55,8 +55,7 @@ export function toQuery(params) {
   Object.entries(params).forEach(([key, value]) => {
     if (value === undefined || value === null || value === "") return;
     if (Array.isArray(value)) {
-      if (!value.length) search.append(key, "");
-      else value.forEach((item) => search.append(key, item));
+      value.filter((item) => item !== undefined && item !== null && item !== "").forEach((item) => search.append(key, item));
     } else {
       search.set(key, value);
     }

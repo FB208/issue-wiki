@@ -53,7 +53,6 @@ def serialize_document_comment(item: DocumentComment) -> DocumentCommentOut:
         user_id=item.user_id,
         user_nickname=item.user.nickname,
         content=item.content,
-        is_confirmed=item.is_confirmed,
         admin_reply=item.admin_reply,
         created_at=item.created_at,
         updated_at=item.updated_at,
@@ -161,7 +160,6 @@ def create_document_comment(document_id: int, payload: CommentCreate, user: User
         parent_id=parent.id if parent else None,
         user_id=user.id,
         content=payload.content,
-        is_confirmed=True,
     )
     db.add(comment)
     db.commit()

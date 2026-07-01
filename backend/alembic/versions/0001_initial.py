@@ -61,13 +61,27 @@ def upgrade() -> None:
         sa.Column("is_hidden", sa.Boolean(), nullable=False),
         sa.Column("source", sa.String(length=32), nullable=False),
         sa.Column("creator_id", sa.Integer(), nullable=True),
+        sa.Column("github_repo", sa.String(length=255), nullable=True),
+        sa.Column("github_issue_id", sa.BigInteger(), nullable=True),
+        sa.Column("github_issue_node_id", sa.String(length=120), nullable=True),
+        sa.Column("github_issue_number", sa.Integer(), nullable=True),
+        sa.Column("github_issue_url", sa.String(length=1000), nullable=True),
+        sa.Column("github_author_login", sa.String(length=120), nullable=True),
+        sa.Column("github_state", sa.String(length=32), nullable=True),
+        sa.Column("github_updated_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("last_github_sync_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("github_sync_error", sa.Text(), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False),
         sa.ForeignKeyConstraint(["creator_id"], ["users.id"]),
         sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint("github_repo", "github_issue_number", name="uq_tasks_github_repo_issue_number"),
         sa.UniqueConstraint("sort_order"),
     )
     op.create_index(op.f("ix_tasks_creator_id"), "tasks", ["creator_id"], unique=False)
+    op.create_index(op.f("ix_tasks_github_issue_id"), "tasks", ["github_issue_id"], unique=True)
+    op.create_index(op.f("ix_tasks_github_issue_number"), "tasks", ["github_issue_number"], unique=False)
+    op.create_index(op.f("ix_tasks_github_repo"), "tasks", ["github_repo"], unique=False)
     op.create_index(op.f("ix_tasks_is_hidden"), "tasks", ["is_hidden"], unique=False)
     op.create_index(op.f("ix_tasks_name"), "tasks", ["name"], unique=False)
     op.create_index(op.f("ix_tasks_sort_order"), "tasks", ["sort_order"], unique=False)
@@ -95,10 +109,14 @@ def upgrade() -> None:
         "task_comments",
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
         sa.Column("task_id", sa.Integer(), nullable=False),
-        sa.Column("user_id", sa.Integer(), nullable=False),
+        sa.Column("user_id", sa.Integer(), nullable=True),
         sa.Column("content", sa.Text(), nullable=False),
-        sa.Column("is_confirmed", sa.Boolean(), nullable=False),
         sa.Column("admin_reply", sa.Text(), nullable=True),
+        sa.Column("github_comment_id", sa.BigInteger(), nullable=True),
+        sa.Column("github_author_login", sa.String(length=120), nullable=True),
+        sa.Column("github_updated_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("last_github_sync_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("github_sync_error", sa.Text(), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False),
         sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
@@ -106,7 +124,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["user_id"], ["users.id"]),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index(op.f("ix_task_comments_is_confirmed"), "task_comments", ["is_confirmed"], unique=False)
+    op.create_index(op.f("ix_task_comments_github_comment_id"), "task_comments", ["github_comment_id"], unique=True)
     op.create_index(op.f("ix_task_comments_task_id"), "task_comments", ["task_id"], unique=False)
     op.create_index(op.f("ix_task_comments_user_id"), "task_comments", ["user_id"], unique=False)
 
@@ -114,29 +132,34 @@ def upgrade() -> None:
         "document_comments",
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
         sa.Column("document_id", sa.Integer(), nullable=False),
+        sa.Column("parent_id", sa.Integer(), nullable=True),
         sa.Column("user_id", sa.Integer(), nullable=False),
         sa.Column("content", sa.Text(), nullable=False),
-        sa.Column("is_confirmed", sa.Boolean(), nullable=False),
         sa.Column("admin_reply", sa.Text(), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False),
         sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
         sa.ForeignKeyConstraint(["document_id"], ["documents.id"]),
+        sa.ForeignKeyConstraint(["parent_id"], ["document_comments.id"]),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"]),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(op.f("ix_document_comments_document_id"), "document_comments", ["document_id"], unique=False)
-    op.create_index(op.f("ix_document_comments_is_confirmed"), "document_comments", ["is_confirmed"], unique=False)
+    op.create_index(op.f("ix_document_comments_parent_id"), "document_comments", ["parent_id"], unique=False)
     op.create_index(op.f("ix_document_comments_user_id"), "document_comments", ["user_id"], unique=False)
 
     op.create_table(
         "sponsor_orders",
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
-        sa.Column("task_id", sa.Integer(), nullable=False),
+        sa.Column("task_id", sa.Integer(), nullable=True),
         sa.Column("user_id", sa.Integer(), nullable=True),
         sa.Column("is_guest", sa.Boolean(), nullable=False),
         sa.Column("merchant_order_no", sa.String(length=80), nullable=False),
-        sa.Column("zpay_trade_no", sa.String(length=120), nullable=True),
+        sa.Column("afdian_order_no", sa.String(length=120), nullable=True),
+        sa.Column("afdian_user_id", sa.String(length=120), nullable=True),
+        sa.Column("afdian_user_private_id", sa.String(length=120), nullable=True),
+        sa.Column("afdian_plan_id", sa.String(length=120), nullable=True),
+        sa.Column("afdian_remark", sa.Text(), nullable=True),
         sa.Column("amount", sa.Numeric(precision=12, scale=2), nullable=False),
         sa.Column("channel", sa.String(length=32), nullable=False),
         sa.Column("status", sa.String(length=32), nullable=False),
@@ -148,12 +171,15 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("merchant_order_no"),
     )
+    op.create_index(op.f("ix_sponsor_orders_afdian_order_no"), "sponsor_orders", ["afdian_order_no"], unique=True)
+    op.create_index(op.f("ix_sponsor_orders_afdian_plan_id"), "sponsor_orders", ["afdian_plan_id"], unique=False)
+    op.create_index(op.f("ix_sponsor_orders_afdian_user_id"), "sponsor_orders", ["afdian_user_id"], unique=False)
+    op.create_index(op.f("ix_sponsor_orders_afdian_user_private_id"), "sponsor_orders", ["afdian_user_private_id"], unique=False)
     op.create_index(op.f("ix_sponsor_orders_is_guest"), "sponsor_orders", ["is_guest"], unique=False)
     op.create_index(op.f("ix_sponsor_orders_merchant_order_no"), "sponsor_orders", ["merchant_order_no"], unique=False)
     op.create_index(op.f("ix_sponsor_orders_status"), "sponsor_orders", ["status"], unique=False)
     op.create_index(op.f("ix_sponsor_orders_task_id"), "sponsor_orders", ["task_id"], unique=False)
     op.create_index(op.f("ix_sponsor_orders_user_id"), "sponsor_orders", ["user_id"], unique=False)
-    op.create_index(op.f("ix_sponsor_orders_zpay_trade_no"), "sponsor_orders", ["zpay_trade_no"], unique=False)
 
     op.create_table(
         "likes",
@@ -190,8 +216,40 @@ def upgrade() -> None:
     )
     op.create_index(op.f("ix_upload_files_uploaded_by"), "upload_files", ["uploaded_by"], unique=False)
 
+    op.create_table(
+        "github_sync_events",
+        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
+        sa.Column("delivery_id", sa.String(length=120), nullable=True),
+        sa.Column("event_type", sa.String(length=80), nullable=False),
+        sa.Column("action", sa.String(length=80), nullable=True),
+        sa.Column("direction", sa.String(length=32), nullable=False),
+        sa.Column("target_type", sa.String(length=32), nullable=True),
+        sa.Column("target_id", sa.BigInteger(), nullable=True),
+        sa.Column("status", sa.String(length=32), nullable=False),
+        sa.Column("error", sa.Text(), nullable=True),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("CURRENT_TIMESTAMP"), nullable=False),
+        sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint("delivery_id"),
+    )
+    op.create_index(op.f("ix_github_sync_events_action"), "github_sync_events", ["action"], unique=False)
+    op.create_index(op.f("ix_github_sync_events_delivery_id"), "github_sync_events", ["delivery_id"], unique=False)
+    op.create_index(op.f("ix_github_sync_events_direction"), "github_sync_events", ["direction"], unique=False)
+    op.create_index(op.f("ix_github_sync_events_event_type"), "github_sync_events", ["event_type"], unique=False)
+    op.create_index(op.f("ix_github_sync_events_status"), "github_sync_events", ["status"], unique=False)
+    op.create_index(op.f("ix_github_sync_events_target_id"), "github_sync_events", ["target_id"], unique=False)
+    op.create_index(op.f("ix_github_sync_events_target_type"), "github_sync_events", ["target_type"], unique=False)
+
 
 def downgrade() -> None:
+    op.drop_index(op.f("ix_github_sync_events_target_type"), table_name="github_sync_events")
+    op.drop_index(op.f("ix_github_sync_events_target_id"), table_name="github_sync_events")
+    op.drop_index(op.f("ix_github_sync_events_status"), table_name="github_sync_events")
+    op.drop_index(op.f("ix_github_sync_events_event_type"), table_name="github_sync_events")
+    op.drop_index(op.f("ix_github_sync_events_direction"), table_name="github_sync_events")
+    op.drop_index(op.f("ix_github_sync_events_delivery_id"), table_name="github_sync_events")
+    op.drop_index(op.f("ix_github_sync_events_action"), table_name="github_sync_events")
+    op.drop_table("github_sync_events")
     op.drop_index(op.f("ix_upload_files_uploaded_by"), table_name="upload_files")
     op.drop_table("upload_files")
     op.drop_index(op.f("ix_likes_user_id"), table_name="likes")
@@ -199,20 +257,23 @@ def downgrade() -> None:
     op.drop_index(op.f("ix_likes_target_id"), table_name="likes")
     op.drop_index(op.f("ix_likes_guest_id"), table_name="likes")
     op.drop_table("likes")
-    op.drop_index(op.f("ix_sponsor_orders_zpay_trade_no"), table_name="sponsor_orders")
     op.drop_index(op.f("ix_sponsor_orders_user_id"), table_name="sponsor_orders")
     op.drop_index(op.f("ix_sponsor_orders_task_id"), table_name="sponsor_orders")
     op.drop_index(op.f("ix_sponsor_orders_status"), table_name="sponsor_orders")
     op.drop_index(op.f("ix_sponsor_orders_merchant_order_no"), table_name="sponsor_orders")
     op.drop_index(op.f("ix_sponsor_orders_is_guest"), table_name="sponsor_orders")
+    op.drop_index(op.f("ix_sponsor_orders_afdian_user_private_id"), table_name="sponsor_orders")
+    op.drop_index(op.f("ix_sponsor_orders_afdian_user_id"), table_name="sponsor_orders")
+    op.drop_index(op.f("ix_sponsor_orders_afdian_plan_id"), table_name="sponsor_orders")
+    op.drop_index(op.f("ix_sponsor_orders_afdian_order_no"), table_name="sponsor_orders")
     op.drop_table("sponsor_orders")
     op.drop_index(op.f("ix_document_comments_user_id"), table_name="document_comments")
-    op.drop_index(op.f("ix_document_comments_is_confirmed"), table_name="document_comments")
+    op.drop_index(op.f("ix_document_comments_parent_id"), table_name="document_comments")
     op.drop_index(op.f("ix_document_comments_document_id"), table_name="document_comments")
     op.drop_table("document_comments")
     op.drop_index(op.f("ix_task_comments_user_id"), table_name="task_comments")
     op.drop_index(op.f("ix_task_comments_task_id"), table_name="task_comments")
-    op.drop_index(op.f("ix_task_comments_is_confirmed"), table_name="task_comments")
+    op.drop_index(op.f("ix_task_comments_github_comment_id"), table_name="task_comments")
     op.drop_table("task_comments")
     op.drop_index(op.f("ix_documents_title"), table_name="documents")
     op.drop_index(op.f("ix_documents_sort_order"), table_name="documents")
@@ -223,6 +284,9 @@ def downgrade() -> None:
     op.drop_index(op.f("ix_tasks_sort_order"), table_name="tasks")
     op.drop_index(op.f("ix_tasks_name"), table_name="tasks")
     op.drop_index(op.f("ix_tasks_is_hidden"), table_name="tasks")
+    op.drop_index(op.f("ix_tasks_github_repo"), table_name="tasks")
+    op.drop_index(op.f("ix_tasks_github_issue_number"), table_name="tasks")
+    op.drop_index(op.f("ix_tasks_github_issue_id"), table_name="tasks")
     op.drop_index(op.f("ix_tasks_creator_id"), table_name="tasks")
     op.drop_table("tasks")
     op.drop_index(op.f("ix_document_folders_sort_order"), table_name="document_folders")

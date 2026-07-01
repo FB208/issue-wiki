@@ -22,7 +22,6 @@ def serialize_task_comment(item: TaskComment) -> TaskCommentOut:
         user_id=item.user_id,
         user_nickname=author,
         content=item.content,
-        is_confirmed=item.is_confirmed,
         admin_reply=item.admin_reply,
         github_comment_id=item.github_comment_id,
         github_author_login=item.github_author_login,
@@ -48,8 +47,9 @@ def list_tasks(
     query = query.filter(Task.is_hidden.is_(False))
     if name:
         query = query.filter(Task.name.like(f"%{name}%"))
-    statuses = [TaskStatus.in_progress.value, TaskStatus.pending_start.value] if status_list is None else status_list
-    query = query.filter(Task.status.in_(statuses))
+    statuses = [item for item in (status_list or []) if item]
+    if statuses:
+        query = query.filter(Task.status.in_(statuses))
 
     donated_col = func.coalesce(donated.c.donated_amount, 0)
     sort_map = {
@@ -76,7 +76,7 @@ def my_tasks(
     db: Session = Depends(get_db),
 ) -> Page[TaskOut]:
     query, _, _ = task_metrics_query(db)
-    query = query.filter(Task.creator_id == user.id).order_by(Task.created_at.desc())
+    query = query.filter(Task.creator_id == user.id, Task.is_hidden.is_(False)).order_by(Task.created_at.desc())
     rows, total, page, page_size = paginate_query(query, page, page_size)
     items = [serialize_task_with_metrics(task, donated_amount, co_creator_count) for task, donated_amount, co_creator_count in rows]
     return page_payload(items, total, page, page_size)

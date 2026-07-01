@@ -44,10 +44,12 @@ def admin_list_tasks(
         if search_text.isdigit():
             search_filters.append(Task.github_issue_number == int(search_text))
         query = query.filter(or_(*search_filters))
-    if status_list:
-        query = query.filter(Task.status.in_(status_list))
-    if source_list:
-        query = query.filter(Task.source.in_(source_list))
+    statuses = [item for item in (status_list or []) if item]
+    sources = [item for item in (source_list or []) if item]
+    if statuses:
+        query = query.filter(Task.status.in_(statuses))
+    if sources:
+        query = query.filter(Task.source.in_(sources))
     visibility_value = visibility or ("all" if include_hidden else "visible")
     if visibility_value == "visible":
         query = query.filter(Task.is_hidden.is_(False))
@@ -109,25 +111,6 @@ def admin_update_task(
     db.commit()
     db.refresh(task)
     schedule_task_github_sync_after_admin_update(background_tasks, task, previous_status, set(data.keys()))
-    return serialize_task(db, task)
-
-
-@router.post("/tasks/{task_id}/approve", response_model=TaskOut)
-def admin_approve_task(
-    task_id: int,
-    background_tasks: BackgroundTasks,
-    db: Session = Depends(get_db),
-) -> TaskOut:
-    task = db.get(Task, task_id)
-    if not task:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="任务不存在")
-    previous_status = task.status
-    if task.status == TaskStatus.completed.value:
-        return serialize_task(db, task)
-    task.status = TaskStatus.pending_start.value
-    db.commit()
-    db.refresh(task)
-    schedule_task_github_sync_after_admin_update(background_tasks, task, previous_status, {"status"})
     return serialize_task(db, task)
 
 
@@ -327,7 +310,6 @@ def admin_list_comments(
             TaskComment.task_id.label("target_id"),
             func.coalesce(User.nickname, TaskComment.github_author_login, "GitHub 用户").label("user"),
             TaskComment.content.label("content"),
-            TaskComment.is_confirmed.label("is_confirmed"),
             TaskComment.admin_reply.label("admin_reply"),
             TaskComment.created_at.label("created_at"),
         )
@@ -341,7 +323,6 @@ def admin_list_comments(
             DocumentComment.document_id.label("target_id"),
             User.nickname.label("user"),
             DocumentComment.content.label("content"),
-            DocumentComment.is_confirmed.label("is_confirmed"),
             DocumentComment.admin_reply.label("admin_reply"),
             DocumentComment.created_at.label("created_at"),
         )
@@ -360,21 +341,12 @@ def admin_list_comments(
         comments.c.target_id,
         comments.c.user,
         comments.c.content,
-        comments.c.is_confirmed,
         comments.c.admin_reply,
         comments.c.created_at,
     ).order_by(desc(comments.c.created_at))
     rows, total, page, page_size = paginate_query(query, page, page_size)
     items = [AdminCommentOut(**dict(row._mapping)) for row in rows]
     return page_payload(items, total, page, page_size)
-
-
-@router.post("/comments/{target}/{comment_id}/confirm")
-def admin_confirm_comment(target: str, comment_id: int, db: Session = Depends(get_db)) -> dict[str, str]:
-    comment = _get_comment(db, target, comment_id)
-    comment.is_confirmed = True
-    db.commit()
-    return {"message": "评论已确认"}
 
 
 @router.post("/comments/{target}/{comment_id}/reply")
@@ -443,7 +415,6 @@ def serialize_admin_task_comment(item: TaskComment) -> TaskCommentOut:
         user_id=item.user_id,
         user_nickname=task_comment_author(item),
         content=item.content,
-        is_confirmed=item.is_confirmed,
         admin_reply=item.admin_reply,
         github_comment_id=item.github_comment_id,
         github_author_login=item.github_author_login,
@@ -461,14 +432,15 @@ def schedule_task_github_sync_after_admin_update(
     previous_status: str,
     changed_fields: set[str],
 ) -> None:
-    became_approved = previous_status == TaskStatus.pending_review.value and task.status == TaskStatus.pending_start.value
-    approval_only = changed_fields == {"status"} and became_approved
-    if became_approved and task.source != TaskSource.github.value and task.github_issue_number is None:
+    moved_out_of_review = (
+        "status" in changed_fields
+        and previous_status == TaskStatus.pending_review.value
+        and task.status != TaskStatus.pending_review.value
+    )
+    if moved_out_of_review and task.source != TaskSource.github.value and task.github_issue_number is None:
         background_tasks.add_task(sync_task_to_github_background, task.id, True)
         return
     if task.github_issue_number is None:
-        return
-    if task.source == TaskSource.github.value and approval_only:
         return
     if changed_fields.intersection({"name", "description", "status"}):
         background_tasks.add_task(sync_task_to_github_background, task.id, False)

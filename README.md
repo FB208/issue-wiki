@@ -66,9 +66,9 @@ GITHUB_API_BASE_URL=https://api.github.com
 
 同步规则：
 
-- 本地待审核任务被管理员审核通过后，如果来源不是 `github` 且尚未绑定 issue，会自动创建 GitHub issue。
-- GitHub issue 通过 webhook 或后台“同步历史任务”导入后，本地任务状态固定为 `待审核`，来源为 `github`，排序排到最后。
-- GitHub 来源任务审核通过时只更新本地状态，不再创建新 issue，避免同步循环。
+- 非 GitHub 来源任务从 `待审核` 改为其他状态后，如果尚未绑定 issue，会自动创建 GitHub issue。
+- GitHub open issue 通过 webhook 或后台“同步历史任务”导入后，本地任务状态为 `待审核`；closed issue 导入为 `已完成`。
+- 已绑定 GitHub issue 的任务状态变化会同步到 GitHub；`已完成` 会关闭 issue，其他状态保持 open。
 - 赞助金额、启动资金、排序、隐藏状态和订单数据不会写入 GitHub。
 - GitHub issue 新评论、编辑评论、删除评论会通过 webhook 同步到本地任务评论。
 
