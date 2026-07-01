@@ -122,6 +122,7 @@ class TaskOut(OrmModel):
 
 class CommentCreate(BaseModel):
     content: str = Field(min_length=1)
+    parent_id: int | None = None
 
 
 class TaskCommentOut(OrmModel):
@@ -141,17 +142,23 @@ class TaskCommentOut(OrmModel):
     updated_at: datetime
 
 
-class SponsorCreate(BaseModel):
-    amount: Decimal = Field(ge=Decimal("10"), decimal_places=2)
+class SponsorIntentOut(BaseModel):
+    payment_url: str
+    feature_id: str
+    instructions: str
 
 
 class SponsorOrderOut(OrmModel):
     id: int
-    task_id: int
+    task_id: int | None
     user_id: int | None
     is_guest: bool
     merchant_order_no: str
-    zpay_trade_no: str | None
+    afdian_order_no: str | None = None
+    afdian_user_id: str | None = None
+    afdian_user_private_id: str | None = None
+    afdian_plan_id: str | None = None
+    afdian_remark: str | None = None
     amount: Decimal
     channel: str
     status: str
@@ -206,6 +213,7 @@ class DocumentOut(OrmModel):
     author: str
     sort_order: int
     like_count: int = 0
+    liked_by_me: bool = False
     comment_count: int = 0
     created_at: datetime
     updated_at: datetime
@@ -214,6 +222,9 @@ class DocumentOut(OrmModel):
 class DocumentCommentOut(OrmModel):
     id: int
     document_id: int
+    parent_id: int | None = None
+    parent_user_nickname: str | None = None
+    parent_content: str | None = None
     user_id: int
     user_nickname: str
     content: str

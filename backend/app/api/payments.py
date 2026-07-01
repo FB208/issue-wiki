@@ -1,42 +1,36 @@
-from datetime import datetime, timezone
-from decimal import Decimal
+from typing import Any
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.dependencies import get_db
-from app.models import PaymentStatus, SponsorOrder
-from app.services.payment import callback_is_paid, verify_callback
+from app.services.payment import afdian_order_is_paid, extract_afdian_order, process_afdian_order
 
 router = APIRouter(prefix="/payments", tags=["payments"])
 
 
-@router.api_route("/zpay/callback", methods=["GET", "POST"])
-async def zpay_callback(request: Request, db: Session = Depends(get_db)) -> str:
-    if request.method == "POST":
-        form = await request.form()
-        params = {key: str(value) for key, value in form.items()}
-    else:
-        params = {key: str(value) for key, value in request.query_params.items()}
+@router.post("/afdian/webhook")
+def afdian_webhook(
+    payload: dict[str, Any],
+    secret: str | None = Query(default=None),
+    x_afdian_webhook_secret: str | None = Header(default=None, alias="X-Afdian-Webhook-Secret"),
+    db: Session = Depends(get_db),
+) -> dict[str, int | str]:
+    expected_secret = settings.afdian_webhook_secret.strip()
+    provided_secret = secret or x_afdian_webhook_secret or ""
+    if expected_secret and provided_secret != expected_secret:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="invalid webhook secret")
 
-    if not verify_callback(params):
-        return "fail"
+    order_payload = extract_afdian_order(payload)
+    if not order_payload:
+        return {"ec": 200, "em": ""}
+    if not afdian_order_is_paid(order_payload):
+        return {"ec": 200, "em": ""}
 
-    order_no = params.get("out_trade_no")
-    if not order_no:
-        return "fail"
-    order = db.query(SponsorOrder).filter(SponsorOrder.merchant_order_no == order_no).first()
-    if not order:
-        return "fail"
+    try:
+        process_afdian_order(db, order_payload)
+    except ValueError as exc:
+        return {"ec": 400, "em": str(exc)}
 
-    money = params.get("money") or params.get("total_amount")
-    if money is None or Decimal(money).quantize(Decimal("0.01")) != Decimal(order.amount).quantize(Decimal("0.01")):
-        return "fail"
-
-    order.callback_at = datetime.now(timezone.utc)
-    order.zpay_trade_no = params.get("trade_no") or order.zpay_trade_no
-    if callback_is_paid(params) and order.status != PaymentStatus.paid.value:
-        order.status = PaymentStatus.paid.value
-        order.paid_at = datetime.now(timezone.utc)
-    db.commit()
-    return "success"
+    return {"ec": 200, "em": ""}

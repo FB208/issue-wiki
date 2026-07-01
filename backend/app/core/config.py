@@ -30,11 +30,11 @@ class Settings(BaseSettings):
     admin_password: str = "admin123456"
     admin_nickname: str = "生产力Mark"
 
-    zpay_gateway_url: str = ""
-    zpay_pid: str = ""
-    zpay_key: str = ""
-    zpay_notify_url: str = ""
-    zpay_return_url: str = ""
+    afdian_sponsor_url: str = ""
+    afdian_webhook_secret: str = ""
+    afdian_user_id: str = ""
+    afdian_api_token: str = ""
+    afdian_api_base_url: str = "https://afdian.net/api/open"
 
     gmail_smtp_host: str = "smtp.gmail.com"
     gmail_smtp_port: int = 587

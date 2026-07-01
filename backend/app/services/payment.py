@@ -1,47 +1,120 @@
-import hashlib
-import time
-from decimal import Decimal
-from urllib.parse import urlencode
-from uuid import uuid4
+import re
+from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
+from typing import Any
+
+from sqlalchemy import or_
+from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.models import SponsorOrder
+from app.models import PaymentChannel, PaymentStatus, SponsorOrder, Task
+
+FEATURE_ID_PATTERN = re.compile(r"\bIW-TASK-(\d+)\b", re.IGNORECASE)
 
 
-def build_merchant_order_no() -> str:
-    return f"IW{int(time.time() * 1000)}{uuid4().hex[:8].upper()}"
+def build_task_feature_id(task_id: int) -> str:
+    return f"IW-TASK-{task_id}"
 
 
-def build_zpay_payment_url(order: SponsorOrder, task_name: str) -> str | None:
-    if not settings.zpay_gateway_url or not settings.zpay_pid or not settings.zpay_key:
+def parse_task_id_from_remark(remark: str | None) -> int | None:
+    if not remark:
         return None
-
-    params = {
-        "pid": settings.zpay_pid,
-        "type": "alipay",
-        "out_trade_no": order.merchant_order_no,
-        "notify_url": settings.zpay_notify_url,
-        "return_url": settings.zpay_return_url,
-        "name": task_name[:120],
-        "money": format(Decimal(order.amount), ".2f"),
-    }
-    params["sign"] = sign_params(params)
-    params["sign_type"] = "MD5"
-    return f"{settings.zpay_gateway_url}?{urlencode(params)}"
+    match = FEATURE_ID_PATTERN.search(remark)
+    return int(match.group(1)) if match else None
 
 
-def sign_params(params: dict[str, str]) -> str:
-    filtered = {k: v for k, v in params.items() if k not in {"sign", "sign_type"} and v is not None and v != ""}
-    source = "&".join(f"{k}={filtered[k]}" for k in sorted(filtered)) + settings.zpay_key
-    return hashlib.md5(source.encode("utf-8")).hexdigest()
+def build_afdian_sponsor_url() -> str | None:
+    return settings.afdian_sponsor_url.strip() or None
 
 
-def verify_callback(params: dict[str, str]) -> bool:
-    if not params.get("sign") or not settings.zpay_key:
+def sponsor_instructions(feature_id: str) -> str:
+    return f"去爱发电赞助时，请在备注/留言中填写功能 ID：{feature_id}。不填写时会记录为赞助作者，不会增加到具体功能的已赞助金额。"
+
+
+def extract_afdian_order(payload: dict[str, Any]) -> dict[str, Any] | None:
+    data = payload.get("data")
+    if isinstance(data, dict):
+        if data.get("type") and data.get("type") != "order":
+            return None
+        order = data.get("order")
+        if isinstance(order, dict):
+            return order
+    order = payload.get("order")
+    if isinstance(order, dict):
+        return order
+    return payload if payload.get("out_trade_no") else None
+
+
+def afdian_order_is_paid(order_payload: dict[str, Any]) -> bool:
+    try:
+        return int(order_payload.get("status") or 0) == 2
+    except (TypeError, ValueError):
         return False
-    return sign_params(params) == params.get("sign")
 
 
-def callback_is_paid(params: dict[str, str]) -> bool:
-    value = (params.get("trade_status") or params.get("status") or "").upper()
-    return value in {"TRADE_SUCCESS", "TRADE_FINISHED", "SUCCESS", "PAID"}
+def process_afdian_order(db: Session, order_payload: dict[str, Any]) -> SponsorOrder:
+    out_trade_no = str(order_payload.get("out_trade_no") or "").strip()
+    if not out_trade_no:
+        raise ValueError("missing out_trade_no")
+
+    amount = parse_order_amount(order_payload.get("total_amount"))
+    remark = str(order_payload.get("remark") or "")
+    task = resolve_task_from_remark(db, remark)
+    now = datetime.now(timezone.utc)
+
+    order = (
+        db.query(SponsorOrder)
+        .filter(or_(SponsorOrder.afdian_order_no == out_trade_no, SponsorOrder.merchant_order_no == out_trade_no))
+        .first()
+    )
+    if order is None:
+        order = SponsorOrder(
+            task_id=task.id if task else None,
+            user_id=None,
+            is_guest=True,
+            merchant_order_no=out_trade_no,
+            afdian_order_no=out_trade_no,
+            amount=amount,
+            channel=PaymentChannel.afdian.value,
+            status=PaymentStatus.paid.value,
+            paid_at=now,
+            callback_at=now,
+        )
+        db.add(order)
+    else:
+        order.task_id = task.id if task else None
+        order.amount = amount
+        order.channel = PaymentChannel.afdian.value
+        order.status = PaymentStatus.paid.value
+        order.paid_at = order.paid_at or now
+        order.callback_at = now
+
+    order.afdian_order_no = out_trade_no
+    order.afdian_user_id = string_or_none(order_payload.get("user_id"))
+    order.afdian_user_private_id = string_or_none(order_payload.get("user_private_id"))
+    order.afdian_plan_id = string_or_none(order_payload.get("plan_id"))
+    order.afdian_remark = remark
+    db.commit()
+    db.refresh(order)
+    return order
+
+
+def parse_order_amount(value: Any) -> Decimal:
+    try:
+        return Decimal(str(value)).quantize(Decimal("0.01"))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise ValueError("invalid total_amount") from exc
+
+
+def resolve_task_from_remark(db: Session, remark: str | None) -> Task | None:
+    task_id = parse_task_id_from_remark(remark)
+    if task_id is None:
+        return None
+    return db.get(Task, task_id)
+
+
+def string_or_none(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None

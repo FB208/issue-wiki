@@ -243,7 +243,6 @@ function Layout({ children, nav, user, logout, openAuth, mobileOpen, setMobileOp
           {user && <NavLink to="/mine/orders">我的赞助</NavLink>}
           {user?.role === "admin" && <NavLink to="/admin">管理员后台</NavLink>}
           <div className="nav-label">文档</div>
-          <NavLink to="/docs">文档总览</NavLink>
           {nav.documents?.slice(0, 10).map((doc) => <NavLink key={doc.id} to={`/docs/${doc.id}`}>{doc.title}</NavLink>)}
         </nav>
       </aside>
@@ -361,7 +360,7 @@ function HomePage({ user, openAuth }) {
       </section>
 
       {demandOpen && <DemandModal user={user} openAuth={openAuth} close={() => setDemandOpen(false)} onDone={loadTasks} />}
-      {sponsorTask && <SponsorModal task={sponsorTask} close={() => setSponsorTask(null)} onDone={loadTasks} />}
+      {sponsorTask && <SponsorModal task={sponsorTask} close={() => setSponsorTask(null)} />}
       {commentTask && <CommentsModal task={commentTask} user={user} openAuth={openAuth} close={() => setCommentTask(null)} onDone={loadTasks} />}
     </>
   );
@@ -424,6 +423,7 @@ function Rank({ index, value }) {
 
 function DemandModal({ user, openAuth, close, onDone }) {
   const [form, setForm] = useState({ name: "", description: "" });
+  const [drawerHeight, setDrawerHeight] = useState(72);
   const [error, setError] = useState("");
   const notify = useToast();
   const { busy, runBusy } = useBusyActions();
@@ -441,45 +441,66 @@ function DemandModal({ user, openAuth, close, onDone }) {
   }
 
   return (
-    <Modal title="提需求" close={close}>
-      <form className="form" onSubmit={submit}>
+    <BottomDrawer title="提需求" open height={drawerHeight} setHeight={setDrawerHeight} close={close}>
+      <form className="form drawer-form" onSubmit={submit}>
         <input placeholder="需求名称" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} />
-        <MarkdownEditor value={form.description} onChange={(description) => setForm({ ...form, description })} user={user} openAuth={openAuth} />
+        <MarkdownEditor value={form.description} onChange={(description) => setForm({ ...form, description })} user={user} openAuth={openAuth} fill />
         {error && <Notice type="error" message={error} />}
-        <button className="btn primary" disabled={submitting} aria-busy={submitting}>{loadingText(submitting, "提交待审核需求", "提交中...")}</button>
+        <div className="drawer-actions"><button type="button" className="btn" onClick={close}>取消</button><button className="btn primary" disabled={submitting} aria-busy={submitting}>{loadingText(submitting, "提交待审核需求", "提交中...")}</button></div>
       </form>
-    </Modal>
+    </BottomDrawer>
   );
 }
 
-function SponsorModal({ task, close, onDone }) {
-  const [amount, setAmount] = useState("10.00");
-  const [result, setResult] = useState(null);
+function SponsorModal({ task, close }) {
   const [error, setError] = useState("");
   const notify = useToast();
   const { busy, runBusy } = useBusyActions();
-  const creating = busy("create-sponsor-order");
+  const opening = busy("open-afdian-sponsor");
+  const featureId = `IW-TASK-${task.id}`;
 
   async function submit(event) {
     event.preventDefault();
     setError("");
-    await runBusy("create-sponsor-order", async () => {
-      const order = await request(`/tasks/${task.id}/sponsor`, { method: "POST", body: JSON.stringify({ amount }) });
-      setResult(order);
-      await onDone();
-      notify("订单已创建");
-      if (order.payment_url) window.location.href = order.payment_url;
+    await runBusy("open-afdian-sponsor", async () => {
+      const result = await request(`/tasks/${task.id}/sponsor`, { method: "POST" });
+      if (!result.payment_url) throw new Error("爱发电赞助链接未配置");
+      window.location.href = result.payment_url;
     }).catch((err) => setError(err.message));
+  }
+
+  async function copyFeatureId() {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(featureId);
+      } else {
+        const textarea = document.createElement("textarea");
+        textarea.value = featureId;
+        textarea.setAttribute("readonly", "");
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand("copy");
+        document.body.removeChild(textarea);
+      }
+      notify("已复制功能 ID");
+    } catch (err) {
+      setError(err.message || "复制失败，请手动复制功能 ID");
+    }
   }
 
   return (
     <Modal title={`赞助：${task.name}`} close={close}>
       <form className="form" onSubmit={submit}>
-        <p className="muted">最低赞助金额 10 元，游客会统一记录为游客赞助。</p>
-        <input type="number" min="10" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} />
+        <p className="sponsor-warning">赞助某功能需要在支付时备注功能ID，参考下图：</p>
+        <img className="sponsor-example-image" src="/afdian-remark-example.png" alt="爱发电备注功能ID示例" />
+        <div className="feature-id-box">
+          <span>{featureId}</span>
+          <button type="button" className="btn" onClick={copyFeatureId}>复制 ID</button>
+        </div>
         {error && <Notice type="error" message={error} />}
-        {result && !result.payment_url && <Notice message={`订单已创建：${result.merchant_order_no}。请确认 Z-Pay 配置。`} />}
-        <button className="btn primary" disabled={creating} aria-busy={creating}>{loadingText(creating, "创建订单并付款", "创建中...")}</button>
+        <button className="btn primary" disabled={opening} aria-busy={opening}>{loadingText(opening, "前往爱发电赞助", "打开中...")}</button>
       </form>
     </Modal>
   );
@@ -547,11 +568,15 @@ function DocumentsPage({ nav, user, openAuth }) {
   const [commentsPage, setCommentsPage] = useState(() => emptyPage());
   const [pagination, setPagination] = useState(defaultPageParams);
   const [docLoading, setDocLoading] = useState(false);
-  const [content, setContent] = useState("");
+  const [replyDrawerOpen, setReplyDrawerOpen] = useState(false);
+  const [replyDrawerHeight, setReplyDrawerHeight] = useState(56);
+  const [replyTarget, setReplyTarget] = useState(null);
+  const [replyContent, setReplyContent] = useState("");
   const [error, setError] = useState("");
   const notify = useToast();
   const { busy, runBusy } = useBusyActions();
   const liking = doc ? busy(`like-document-${doc.id}`) : false;
+  const likedByMe = Boolean(doc?.liked_by_me);
   const submittingComment = doc ? busy(`submit-document-comment-${doc.id}`) : false;
 
   useEffect(() => {
@@ -571,19 +596,38 @@ function DocumentsPage({ nav, user, openAuth }) {
     }
   }
 
-  useEffect(() => { setPagination(defaultPageParams); }, [documentId]);
+  useEffect(() => {
+    setPagination(defaultPageParams);
+    setReplyDrawerOpen(false);
+    setReplyTarget(null);
+    setReplyContent("");
+  }, [documentId]);
   useEffect(() => { loadDoc(); }, [documentId, pagination.page, pagination.page_size]);
 
   async function like() {
     if (!doc) return;
     await runBusy(`like-document-${doc.id}`, async () => {
       const result = await request(`/documents/${doc.id}/likes`, { method: "POST" });
-      setDoc({ ...doc, like_count: result.count });
-      notify("已点赞");
+      setDoc({ ...doc, like_count: result.count, liked_by_me: result.liked });
+      notify(result.liked ? "已点赞" : "点赞已更新");
     }).catch((err) => {
       setError(err.message);
       notify("点赞失败", "error");
     });
+  }
+
+  function openReplyDrawer(target = null) {
+    if (!user) return openAuth();
+    setError("");
+    setReplyTarget(target);
+    setReplyContent("");
+    setReplyDrawerOpen(true);
+  }
+
+  function closeReplyDrawer() {
+    setReplyDrawerOpen(false);
+    setReplyTarget(null);
+    setReplyContent("");
   }
 
   async function submitComment(event) {
@@ -591,10 +635,13 @@ function DocumentsPage({ nav, user, openAuth }) {
     if (!user) return openAuth();
     setError("");
     await runBusy(`submit-document-comment-${doc.id}`, async () => {
-      await request(`/documents/${doc.id}/comments`, { method: "POST", body: JSON.stringify({ content }) });
-      setContent("");
+      await request(`/documents/${doc.id}/comments`, {
+        method: "POST",
+        body: JSON.stringify({ content: replyContent, parent_id: replyTarget?.id || undefined }),
+      });
+      closeReplyDrawer();
       await loadDoc();
-      notify("评论已发布");
+      notify(replyTarget ? "回复已发布" : "评论已发布");
     }).catch((err) => setError(err.message));
   }
 
@@ -603,22 +650,44 @@ function DocumentsPage({ nav, user, openAuth }) {
   }
 
   return (
+    <>
     <section className="doc-layout">
       <article className="panel doc-panel">
-        <div className="doc-head"><div><span className="label">文档</span><h2>{doc.title}</h2><p>作者：{doc.author}，更新于 {formatDate(doc.updated_at)}</p></div><button className="btn" disabled={liking} aria-busy={liking} onClick={like}>{loadingText(liking, `点赞 ${doc.like_count}`, "处理中...")}</button></div>
+        <div className="doc-head"><div><span className="label">文档</span><h2>{doc.title}</h2><p>作者：{doc.author}，更新于 {formatDate(doc.updated_at)}</p></div><div className="row-actions"><button className="btn" disabled={liking || likedByMe} aria-busy={liking} onClick={like}>{loadingText(liking, `${likedByMe ? "已点赞" : "点赞"} ${doc.like_count}`, "处理中...")}</button><button className="btn primary" onClick={() => openReplyDrawer(null)}>回复</button></div></div>
         <div className="markdown-body"><ReactMarkdown remarkPlugins={[remarkGfm]}>{doc.content}</ReactMarkdown></div>
       </article>
-      <aside className="panel comments-panel">
-        <div className="panel-head"><h2>文档评论</h2></div>
-        <div className="comment-list compact">{docLoading ? <div className="empty">加载中...</div> : pageItems(commentsPage).map((item) => <Comment key={item.id} item={item} />)}</div>
+      <section className="panel comments-panel document-comments-panel">
+        <div className="panel-head"><h2>文档评论</h2><button className="btn" onClick={() => openReplyDrawer(null)}>发起评论</button></div>
+        <div className="comment-list compact">
+          {docLoading ? <div className="empty">加载中...</div> : pageItems(commentsPage).map((item) => <DocumentComment key={item.id} item={item} onReply={openReplyDrawer} />)}
+          {!docLoading && !commentsPage.items.length && <div className="empty">暂无评论</div>}
+        </div>
         <Pagination pageData={commentsPage} loading={docLoading} onChange={(next) => setPagination((current) => ({ ...current, ...next }))} />
-        <form className="form" onSubmit={submitComment}>
-          <textarea placeholder="登录后评论文档" value={content} onChange={(event) => setContent(event.target.value)} />
-          {error && <Notice type="error" message={error} />}
-          <button className="btn primary" disabled={submittingComment} aria-busy={submittingComment}>{loadingText(submittingComment, "发表评论", "发布中...")}</button>
-        </form>
-      </aside>
+      </section>
     </section>
+    <BottomDrawer title={replyTarget ? "回复评论" : "回复文档"} open={replyDrawerOpen} height={replyDrawerHeight} setHeight={setReplyDrawerHeight} close={closeReplyDrawer}>
+      <form className="form drawer-form" onSubmit={submitComment}>
+        {replyTarget ? <div className="reply-target"><b>回复 @{replyTarget.user_nickname || replyTarget.user}</b><p>{truncateText(replyTarget.content, 120)}</p></div> : <p className="muted">回复当前文档，内容会显示在文档评论区。</p>}
+        <MarkdownEditor value={replyContent} onChange={setReplyContent} user={user} openAuth={openAuth} compact fill />
+        {error && <Notice type="error" message={error} />}
+        <div className="drawer-actions"><button type="button" className="btn" onClick={closeReplyDrawer}>取消</button><button className="btn primary" disabled={submittingComment || !replyContent.trim()} aria-busy={submittingComment}>{loadingText(submittingComment, replyTarget ? "发布回复" : "发布评论", "发布中...")}</button></div>
+      </form>
+    </BottomDrawer>
+    </>
+  );
+}
+
+function DocumentComment({ item, onReply }) {
+  return (
+    <article className={`comment ${item.parent_id ? "is-reply" : ""}`}>
+      <div className="comment-head">
+        <div><b>{item.user_nickname || item.user}</b><span>{formatDate(item.created_at)}</span></div>
+        <button className="link-btn" onClick={() => onReply(item)}>回复</button>
+      </div>
+      {item.parent_id && <blockquote className="reply-reference">回复 @{item.parent_user_nickname || "原评论"}：{item.parent_content ? truncateText(item.parent_content, 100) : "原评论已删除"}</blockquote>}
+      <CommentMarkdown content={item.content} />
+      {item.admin_reply && <blockquote>管理员回复：{item.admin_reply}</blockquote>}
+    </article>
   );
 }
 
@@ -920,7 +989,7 @@ function AdminPage({ user, openAuth, refreshNav }) {
             <input type="number" placeholder="启动资金" value={taskForm.start_amount} onChange={(event) => setTaskForm({ ...taskForm, start_amount: event.target.value })} />
             <select value={taskForm.status} onChange={(event) => setTaskForm({ ...taskForm, status: event.target.value })}>{statusOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select>
           </div>
-          <MarkdownEditor value={taskForm.description} onChange={(description) => setTaskForm({ ...taskForm, description })} user={user} openAuth={openAuth} />
+          <MarkdownEditor value={taskForm.description} onChange={(description) => setTaskForm({ ...taskForm, description })} user={user} openAuth={openAuth} fill />
           <div className="drawer-actions"><button type="button" className="btn" onClick={() => setTaskDrawerOpen(false)}>取消</button><button className="btn primary" disabled={busy("admin-create-task")} aria-busy={busy("admin-create-task")}>{loadingText(busy("admin-create-task"), "创建任务", "创建中...")}</button></div>
         </form>
       </BottomDrawer>
@@ -1088,13 +1157,13 @@ function CommentAdminList({ comments, action, busy }) {
     const confirmBusy = busy(`admin-comment-${item.target}-${item.id}-confirm`);
     const replyBusy = busy(`admin-comment-${item.target}-${item.id}-reply`);
     const deleteBusy = busy(`admin-comment-${item.target}-${item.id}-delete`);
-    return <div key={`${item.target}-${item.id}`} className="admin-row comment-admin"><b>{item.label}</b><span>{item.user}</span><p>{item.content}</p><button className="btn" disabled={confirmBusy} aria-busy={confirmBusy} onClick={() => action(item.target, item.id, "confirm")}>{loadingText(confirmBusy, "确认", "处理中...")}</button><button className="btn" disabled={replyBusy} aria-busy={replyBusy} onClick={() => { if (busy(`admin-comment-${item.target}-${item.id}-reply`)) return; const admin_reply = prompt("回复内容", item.admin_reply || ""); if (admin_reply === null) return; action(item.target, item.id, "reply", { admin_reply }); }}>{loadingText(replyBusy, "回复", "保存中...")}</button><button className="btn danger" disabled={deleteBusy} aria-busy={deleteBusy} onClick={() => action(item.target, item.id, "delete")}>{loadingText(deleteBusy, "删除", "处理中...")}</button></div>;
+    return <div key={`${item.target}-${item.id}`} className="admin-row comment-admin"><b>{item.label}</b><span>{item.user}</span><p>{item.content}</p>{item.target === "task" && <button className="btn" disabled={confirmBusy} aria-busy={confirmBusy} onClick={() => action(item.target, item.id, "confirm")}>{loadingText(confirmBusy, "确认", "处理中...")}</button>}<button className="btn" disabled={replyBusy} aria-busy={replyBusy} onClick={() => { if (busy(`admin-comment-${item.target}-${item.id}-reply`)) return; const admin_reply = prompt("回复内容", item.admin_reply || ""); if (admin_reply === null) return; action(item.target, item.id, "reply", { admin_reply }); }}>{loadingText(replyBusy, "回复", "保存中...")}</button><button className="btn danger" disabled={deleteBusy} aria-busy={deleteBusy} onClick={() => action(item.target, item.id, "delete")}>{loadingText(deleteBusy, "删除", "处理中...")}</button></div>;
   })}</div>;
 }
 
 function OrderList({ orders }) {
   if (!orders.length) return <div className="empty">暂无订单</div>;
-  return <div className="admin-list">{orders.map((order) => <div key={order.id} className="admin-row"><b>{order.merchant_order_no}</b><span>任务 #{order.task_id}</span><span>¥{order.amount}</span><span>{order.status}</span><span>{formatDate(order.created_at)}</span></div>)}</div>;
+  return <div className="admin-list">{orders.map((order) => <div key={order.id} className="admin-row"><b>{order.merchant_order_no}</b><span>{order.task_id ? `任务 #${order.task_id}` : "赞助作者"}</span><span>{order.channel}</span><span>¥{order.amount}</span><span>{order.status}</span><span>{formatDate(order.created_at)}</span></div>)}</div>;
 }
 
 function Pagination({ pageData, onChange, loading = false }) {
@@ -1162,7 +1231,7 @@ function BottomDrawer({ title, open, height, setHeight, close, children }) {
   );
 }
 
-function MarkdownEditor({ value, onChange, user, openAuth, compact = false }) {
+function MarkdownEditor({ value, onChange, user, openAuth, compact = false, fill = false }) {
   const [uploading, setUploading] = useState(false);
   const editorRef = useRef(null);
   const selectionRef = useRef(null);
@@ -1279,7 +1348,7 @@ function MarkdownEditor({ value, onChange, user, openAuth, compact = false }) {
   }
 
   return (
-    <div className={`markdown-editor ${compact ? "compact" : ""}`} data-color-mode="light" ref={editorRef}>
+    <div className={`markdown-editor ${compact ? "compact" : ""} ${fill ? "fill" : ""}`} data-color-mode="light" ref={editorRef}>
       <div className="editor-uploadbar">
         <span>支持 Markdown，可粘贴图片或文件自动上传</span>
         <label className={`file-btn ${uploading ? "disabled" : ""}`} aria-busy={uploading}>{uploading ? "上传中..." : "上传附件"}<input type="file" multiple disabled={uploading} onChange={onFile} /></label>
@@ -1374,7 +1443,11 @@ function AuthModal({ close, onAuthed }) {
 }
 
 function Comment({ item }) {
-  return <article className="comment"><b>{item.user_nickname || item.user}</b><span>{formatDate(item.created_at)} {item.is_confirmed ? "已确认" : "未确认"}</span><p>{item.content}</p>{item.admin_reply && <blockquote>管理员回复：{item.admin_reply}</blockquote>}</article>;
+  return <article className="comment"><b>{item.user_nickname || item.user}</b><span>{formatDate(item.created_at)} {item.is_confirmed ? "已确认" : "未确认"}</span><CommentMarkdown content={item.content} />{item.admin_reply && <blockquote>管理员回复：{item.admin_reply}</blockquote>}</article>;
+}
+
+function CommentMarkdown({ content }) {
+  return <div className="comment-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{content || ""}</ReactMarkdown></div>;
 }
 
 function Gate({ openAuth }) {
@@ -1409,4 +1482,10 @@ function Notice({ message, type = "info" }) {
 function formatDate(value) {
   if (!value) return "-";
   return new Date(value).toLocaleDateString("zh-CN");
+}
+
+function truncateText(value, maxLength) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength)}...`;
 }

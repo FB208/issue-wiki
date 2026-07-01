@@ -17,7 +17,7 @@
 copy .env.example .env
 ```
 
-然后配置 `.env` 中的 MySQL、Redis、Z-Pay、Gmail SMTP、阿里云短信和 RustFS。后端本地调试和 Docker Compose 都读取根目录 `.env`。
+然后配置 `.env` 中的 MySQL、Redis、爱发电、Gmail SMTP、阿里云短信和 RustFS。后端本地调试和 Docker Compose 都读取根目录 `.env`。
 
 后端：
 
@@ -72,6 +72,25 @@ GITHUB_API_BASE_URL=https://api.github.com
 - 赞助金额、启动资金、排序、隐藏状态和订单数据不会写入 GitHub。
 - GitHub issue 新评论、编辑评论、删除评论会通过 webhook 同步到本地任务评论。
 
+## 爱发电赞助配置
+
+`.env` 中配置：
+
+```bash
+AFDIAN_SPONSOR_URL=https://afdian.com/a/your-name
+AFDIAN_WEBHOOK_SECRET=replace-with-random-secret
+AFDIAN_USER_ID=
+AFDIAN_API_TOKEN=
+AFDIAN_API_BASE_URL=https://afdian.net/api/open
+```
+
+在爱发电开发者后台配置 webhook：
+
+- Webhook URL：`https://你的域名/api/payments/afdian/webhook?secret=AFDIAN_WEBHOOK_SECRET的值`
+- 用户点击任务赞助时，系统会展示功能 ID，例如 `IW-TASK-12`。
+- 用户在爱发电备注/留言中填写功能 ID 后，支付成功回调会自动计入对应任务。
+- 未填写功能 ID 的订单会记录为“赞助作者”，不会增加到某一个具体任务上。
+
 ## VSCode 一键调试
 
 已提供 `.vscode/launch.json` 和 `.vscode/tasks.json`。
@@ -90,6 +109,6 @@ GITHUB_API_BASE_URL=https://api.github.com
 
 ## 部署
 
-复制 `.env.example` 为服务器部署目录下的 `.env`，配置 MySQL、Redis、Z-Pay、Gmail SMTP、阿里云短信和 RustFS。
+复制 `.env.example` 为服务器部署目录下的 `.env`，配置 MySQL、Redis、爱发电、Gmail SMTP、阿里云短信和 RustFS。
 
 提交符合 `vX.X.X` 的 tag 后，`.github/workflows/deploy.yml` 会构建单镜像并通过 SSH 执行 `docker compose` 部署。

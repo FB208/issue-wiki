@@ -6,10 +6,10 @@ from sqlalchemy.orm import Session
 
 from app.api.utils import next_sort_order, page_payload, paginate_query, serialize_task, serialize_task_with_metrics, task_metrics_query
 from app.dependencies import get_current_user, get_current_user_optional, get_db
-from app.models import PaymentChannel, PaymentStatus, SponsorOrder, Task, TaskComment, TaskSource, TaskStatus, User
-from app.schemas import CommentCreate, Page, SponsorCreate, SponsorOrderOut, TaskCommentOut, TaskDemandCreate, TaskOut
+from app.models import SponsorOrder, Task, TaskComment, TaskSource, TaskStatus, User
+from app.schemas import CommentCreate, Page, SponsorIntentOut, SponsorOrderOut, TaskCommentOut, TaskDemandCreate, TaskOut
 from app.services.github_sync import sync_comment_to_github_background
-from app.services.payment import build_merchant_order_no, build_zpay_payment_url
+from app.services.payment import build_afdian_sponsor_url, build_task_feature_id, sponsor_instructions
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
@@ -152,32 +152,24 @@ def create_task_comment(
     return serialize_task_comment(comment)
 
 
-@router.post("/{task_id}/sponsor", response_model=SponsorOrderOut)
+@router.post("/{task_id}/sponsor", response_model=SponsorIntentOut)
 def create_sponsor_order(
     task_id: int,
-    payload: SponsorCreate,
     user: User | None = Depends(get_current_user_optional),
     db: Session = Depends(get_db),
-) -> SponsorOrderOut:
+) -> SponsorIntentOut:
     if user and user.is_banned:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="账号已被封禁")
     task = db.get(Task, task_id)
     if not task or task.is_hidden:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="任务不存在")
 
-    order = SponsorOrder(
-        task_id=task.id,
-        user_id=user.id if user else None,
-        is_guest=user is None,
-        merchant_order_no=build_merchant_order_no(),
-        amount=payload.amount,
-        channel=PaymentChannel.alipay.value,
-        status=PaymentStatus.pending.value,
+    payment_url = build_afdian_sponsor_url()
+    if not payment_url:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="爱发电赞助链接未配置")
+    feature_id = build_task_feature_id(task.id)
+    return SponsorIntentOut(
+        payment_url=payment_url,
+        feature_id=feature_id,
+        instructions=sponsor_instructions(feature_id),
     )
-    db.add(order)
-    db.commit()
-    db.refresh(order)
-    payment_url = build_zpay_payment_url(order, task.name)
-    result = SponsorOrderOut.model_validate(order)
-    result.payment_url = payment_url
-    return result

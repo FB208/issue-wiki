@@ -41,7 +41,7 @@ class PaymentStatus(str, Enum):
 
 
 class PaymentChannel(str, Enum):
-    alipay = "alipay"
+    afdian = "afdian"
 
 
 class LikeTarget(str, Enum):
@@ -132,19 +132,23 @@ class SponsorOrder(Base):
     __tablename__ = "sponsor_orders"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id"), index=True)
+    task_id: Mapped[int | None] = mapped_column(ForeignKey("tasks.id"), nullable=True, index=True)
     user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     is_guest: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     merchant_order_no: Mapped[str] = mapped_column(String(80), unique=True, index=True)
-    zpay_trade_no: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    afdian_order_no: Mapped[str | None] = mapped_column(String(120), unique=True, nullable=True, index=True)
+    afdian_user_id: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    afdian_user_private_id: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    afdian_plan_id: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    afdian_remark: Mapped[str | None] = mapped_column(Text, nullable=True)
     amount: Mapped[float] = mapped_column(Numeric(12, 2))
-    channel: Mapped[str] = mapped_column(String(32), default=PaymentChannel.alipay.value)
+    channel: Mapped[str] = mapped_column(String(32), default=PaymentChannel.afdian.value)
     status: Mapped[str] = mapped_column(String(32), default=PaymentStatus.pending.value, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     callback_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    task: Mapped[Task] = relationship(back_populates="orders")
+    task: Mapped[Task | None] = relationship(back_populates="orders")
     user: Mapped[User | None] = relationship()
 
 
@@ -181,6 +185,7 @@ class DocumentComment(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     document_id: Mapped[int] = mapped_column(ForeignKey("documents.id"), index=True)
+    parent_id: Mapped[int | None] = mapped_column(ForeignKey("document_comments.id"), nullable=True, index=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     content: Mapped[str] = mapped_column(Text)
     is_confirmed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
@@ -190,6 +195,7 @@ class DocumentComment(Base):
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     document: Mapped[Document] = relationship()
+    parent: Mapped["DocumentComment | None"] = relationship(remote_side=[id])
     user: Mapped[User] = relationship()
 
 
