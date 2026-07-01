@@ -47,7 +47,7 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-frontend_dir = Path(__file__).resolve().parents[2] / "static"
+frontend_dir = Path(__file__).resolve().parents[1] / "static"
 if frontend_dir.exists():
     assets_dir = frontend_dir / "assets"
     if assets_dir.exists():
