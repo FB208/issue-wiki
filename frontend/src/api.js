@@ -44,10 +44,20 @@ export async function request(path, options = {}) {
   const contentType = response.headers.get("content-type") || "";
   const data = contentType.includes("application/json") ? await response.json() : await response.text();
   if (!response.ok) {
-    const message = typeof data === "string" ? data : data.detail || "请求失败";
+    const message = typeof data === "string" ? formatPlainError(data, response.status) : data.detail || "请求失败";
     throw new Error(message);
   }
   return data;
+}
+
+function formatPlainError(value, status) {
+  const text = String(value || "").trim();
+  if (!text) return `请求失败：HTTP ${status}`;
+  if (text.startsWith("<!DOCTYPE") || text.startsWith("<html")) {
+    if (status === 502 || text.includes("Bad gateway")) return "服务器网关错误：后端服务暂时不可用，请检查容器和反向代理日志";
+    return `服务器返回了非 JSON 错误页面：HTTP ${status}`;
+  }
+  return text.length > 500 ? `${text.slice(0, 500)}...` : text;
 }
 
 export function toQuery(params) {

@@ -274,13 +274,14 @@ def call_xorpay_pay(payload: dict[str, str]) -> dict[str, Any]:
     url = f"{xorpay_base_url()}/api/pay/{settings.xorpay_aid.strip()}"
     try:
         response = httpx.post(url, data=payload, timeout=15)
-        data = response.json()
     except httpx.HTTPError as exc:
         raise PaymentProviderError(f"XorPay 下单请求失败：{exc}") from exc
-    except ValueError as exc:
-        raise PaymentProviderError("XorPay 下单返回不是 JSON") from exc
     if response.status_code >= 400:
-        raise PaymentProviderError(f"XorPay 下单 HTTP {response.status_code}：{json_dumps(data)}")
+        raise PaymentProviderError(f"XorPay 下单 HTTP {response.status_code}：{response_text_summary(response)}")
+    try:
+        data = response.json()
+    except ValueError as exc:
+        raise PaymentProviderError(f"XorPay 下单返回不是 JSON：{response_text_summary(response)}") from exc
     return data if isinstance(data, dict) else {"status": "invalid_response", "raw": data}
 
 
@@ -289,13 +290,14 @@ def query_xorpay_order(merchant_order_no: str) -> dict[str, Any]:
     url = f"{xorpay_base_url()}/api/query2/{settings.xorpay_aid.strip()}"
     try:
         response = httpx.get(url, params={"order_id": merchant_order_no, "sign": sign}, timeout=15)
-        data = response.json()
     except httpx.HTTPError as exc:
         raise PaymentProviderError(f"XorPay 订单查询失败：{exc}") from exc
-    except ValueError as exc:
-        raise PaymentProviderError("XorPay 订单查询返回不是 JSON") from exc
     if response.status_code >= 400:
-        raise PaymentProviderError(f"XorPay 订单查询 HTTP {response.status_code}：{json_dumps(data)}")
+        raise PaymentProviderError(f"XorPay 订单查询 HTTP {response.status_code}：{response_text_summary(response)}")
+    try:
+        data = response.json()
+    except ValueError as exc:
+        raise PaymentProviderError(f"XorPay 订单查询返回不是 JSON：{response_text_summary(response)}") from exc
     return data if isinstance(data, dict) else {"status": "invalid_response", "raw": data}
 
 
@@ -351,6 +353,15 @@ def xorpay_error_message(result: dict[str, Any]) -> str:
     status = result.get("status") or "unknown"
     info = result.get("info")
     return f"XorPay 下单失败：{status}{f'，{info}' if info else ''}"
+
+
+def response_text_summary(response: httpx.Response) -> str:
+    text = response.text.strip()
+    if not text:
+        return "空响应"
+    if text.startswith("<!DOCTYPE") or text.startswith("<html"):
+        return "返回了 HTML 错误页面"
+    return text[:500]
 
 
 def json_dumps(value: Any) -> str:
