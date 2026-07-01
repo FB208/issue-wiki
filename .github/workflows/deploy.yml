@@ -1,0 +1,93 @@
+name: Deploy Issue Wiki on Tag
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+concurrency:
+  group: deploy-issue-wiki-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-push:
+    name: Build and Push Image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Normalize version from tag
+        run: echo "VERSION=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to container registry
+        env:
+          REGISTRY: ${{ secrets.REGISTRY }}
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+        run: echo "$REGISTRY_PASSWORD" | docker login "$REGISTRY" -u "$REGISTRY_USERNAME" --password-stdin
+
+      - name: Build and push image
+        env:
+          REGISTRY_REPO: ${{ secrets.REGISTRY_REPO }}
+        run: |
+          set -e
+          docker build \
+            -t "$REGISTRY_REPO:$VERSION" \
+            -t "$REGISTRY_REPO:latest" \
+            .
+          docker push "$REGISTRY_REPO:$VERSION"
+          docker push "$REGISTRY_REPO:latest"
+
+  deploy:
+    name: Deploy over SSH
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          script: |
+            set -e
+            VERSION="${{ github.ref_name }}"
+            echo "Deploying issue-wiki version: $VERSION"
+            echo "${{ secrets.REGISTRY_PASSWORD }}" | docker login "${{ secrets.REGISTRY }}" -u "${{ secrets.REGISTRY_USERNAME }}" --password-stdin
+            cd "${{ secrets.DEPLOY_DIR }}"
+            VERSION="$VERSION" docker compose -f docker-compose.yml pull app
+            VERSION="$VERSION" docker compose -f docker-compose.yml up -d --no-build app
+            docker image prune -f
+
+  notify:
+    name: Send deployment email
+    needs:
+      - build-and-push
+      - deploy
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send email
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 587
+          username: ${{ secrets.GMAIL_USERNAME }}
+          password: ${{ secrets.GMAIL_PASSWORD }}
+          subject: "[Issue Wiki] Tag ${{ github.ref_name }} 部署结果: build=${{ needs.build-and-push.result }}, deploy=${{ needs.deploy.result }}"
+          to: ${{ secrets.GMAIL_TO }}
+          from: ${{ secrets.GMAIL_USERNAME }}
+          secure: false
+          body: |
+            仓库: ${{ github.repository }}
+            触发: push tag ${{ github.ref_name }}
+            构建: ${{ needs.build-and-push.result }}
+            部署: ${{ needs.deploy.result }}
+            提交: ${{ github.sha }}
+            运行链接: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            触发人: ${{ github.actor }}

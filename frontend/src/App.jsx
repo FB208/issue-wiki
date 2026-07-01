@@ -1,0 +1,1412 @@
+import { createContext, startTransition, useContext, useDeferredValue, useEffect, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import { Link, NavLink, Route, Routes, useNavigate, useParams } from "react-router-dom";
+import MDEditor, { commands } from "@uiw/react-md-editor";
+import "@uiw/react-md-editor/markdown-editor.css";
+import "@uiw/react-markdown-preview/markdown.css";
+import remarkGfm from "remark-gfm";
+
+import { request, setToken, toQuery, uploadFile } from "./api.js";
+
+const statusOptions = [
+  { value: "pending_review", label: "待审核" },
+  { value: "pending_start", label: "待启动" },
+  { value: "in_progress", label: "进行中" },
+  { value: "completed", label: "已完成" },
+];
+
+const sourceOptions = [
+  { value: "admin", label: "管理员" },
+  { value: "user", label: "用户" },
+  { value: "github", label: "GitHub" },
+];
+
+const visibilityOptions = [
+  { value: "all", label: "全部可见性" },
+  { value: "visible", label: "仅公开" },
+  { value: "hidden", label: "仅隐藏" },
+];
+
+const githubSyncOptions = [
+  { value: "all", label: "全部同步状态" },
+  { value: "unbound", label: "未绑定 Issue" },
+  { value: "pending", label: "待同步" },
+  { value: "synced", label: "已同步" },
+  { value: "error", label: "同步失败" },
+];
+
+const defaultStatuses = ["in_progress", "pending_start"];
+const defaultPageParams = { page: 1, page_size: 20 };
+const pageSizeOptions = [10, 20, 50];
+
+function createDefaultAdminTaskFilters() {
+  return {
+    q: "",
+    status: [],
+    source: [],
+    visibility: "all",
+    github_sync: "all",
+    github_issue_number: "",
+    created_from: "",
+    created_to: "",
+  };
+}
+
+function emptyPage(params = defaultPageParams) {
+  return { items: [], total: 0, page: params.page, page_size: params.page_size, pages: 1 };
+}
+
+function pageItems(pageData) {
+  return pageData?.items || [];
+}
+
+function loadingText(isBusy, idleText, busyText = "处理中...") {
+  return isBusy ? busyText : idleText;
+}
+
+function useBusyActions() {
+  const busyRef = useRef(new Set());
+  const [, setBusyVersion] = useState(0);
+
+  function busy(key) {
+    return busyRef.current.has(key);
+  }
+
+  async function runBusy(key, action) {
+    if (busyRef.current.has(key)) return undefined;
+    busyRef.current.add(key);
+    setBusyVersion((value) => value + 1);
+    try {
+      return await action();
+    } finally {
+      busyRef.current.delete(key);
+      setBusyVersion((value) => value + 1);
+    }
+  }
+
+  return { busy, runBusy };
+}
+
+let overlayLockCount = 0;
+let previousBodyOverflow = "";
+let previousBodyPaddingRight = "";
+
+function useOverlayFocus(containerRef, close, enabled = true) {
+  useEffect(() => {
+    if (!enabled) return undefined;
+    const previousActiveElement = document.activeElement;
+    const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
+    if (overlayLockCount === 0) {
+      previousBodyOverflow = document.body.style.overflow;
+      previousBodyPaddingRight = document.body.style.paddingRight;
+      document.body.style.overflow = "hidden";
+      if (scrollbarWidth > 0) document.body.style.paddingRight = `${scrollbarWidth}px`;
+    }
+    overlayLockCount += 1;
+    window.requestAnimationFrame(() => containerRef.current?.focus());
+    return () => {
+      overlayLockCount = Math.max(0, overlayLockCount - 1);
+      if (overlayLockCount === 0) {
+        document.body.style.overflow = previousBodyOverflow;
+        document.body.style.paddingRight = previousBodyPaddingRight;
+      }
+      if (previousActiveElement instanceof HTMLElement) previousActiveElement.focus();
+    };
+  }, [containerRef, enabled]);
+
+  function handleOverlayKeyDown(event) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      close();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const focusable = containerRef.current?.querySelectorAll(
+      'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    );
+    const nodes = Array.from(focusable || []).filter((node) => node.offsetParent !== null);
+    if (!nodes.length) {
+      event.preventDefault();
+      containerRef.current?.focus();
+      return;
+    }
+    const first = nodes[0];
+    const last = nodes[nodes.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  return handleOverlayKeyDown;
+}
+
+const ToastContext = createContext(() => {});
+let nextToastId = 0;
+
+function ToastProvider({ children }) {
+  const [toasts, setToasts] = useState([]);
+
+  function notify(message, type = "success") {
+    const id = nextToastId += 1;
+    setToasts((current) => [...current, { id, message, type }].slice(-4));
+    window.setTimeout(() => {
+      setToasts((current) => current.filter((item) => item.id !== id));
+    }, 2200);
+  }
+
+  return (
+    <ToastContext.Provider value={notify}>
+      {children}
+      <div className="toast-stack" aria-live="polite" aria-atomic="true">
+        {toasts.map((item) => <div key={item.id} className={`toast ${item.type}`}>{item.message}</div>)}
+      </div>
+    </ToastContext.Provider>
+  );
+}
+
+function useToast() {
+  return useContext(ToastContext);
+}
+
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [nav, setNav] = useState({ folders: [], documents: [] });
+  const [authOpen, setAuthOpen] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  async function loadUser() {
+    try {
+      const me = await request("/auth/me");
+      setUser(me);
+    } catch {
+      setUser(null);
+    }
+  }
+
+  async function loadNavigation() {
+    try {
+      setNav(await request("/navigation"));
+    } catch {
+      setNav({ folders: [], documents: [] });
+    }
+  }
+
+  useEffect(() => {
+    loadUser();
+    loadNavigation();
+  }, []);
+
+  function logout() {
+    setToken("");
+    setUser(null);
+  }
+
+  return (
+    <ToastProvider>
+      <Layout nav={nav} user={user} logout={logout} openAuth={() => setAuthOpen(true)} mobileOpen={mobileOpen} setMobileOpen={setMobileOpen}>
+        <Routes>
+          <Route path="/" element={<HomePage user={user} openAuth={() => setAuthOpen(true)} />} />
+          <Route path="/docs" element={<DocumentsPage nav={nav} user={user} openAuth={() => setAuthOpen(true)} />} />
+          <Route path="/docs/:documentId" element={<DocumentsPage nav={nav} user={user} openAuth={() => setAuthOpen(true)} />} />
+          <Route path="/mine/tasks" element={<MinePage type="tasks" user={user} openAuth={() => setAuthOpen(true)} />} />
+          <Route path="/mine/orders" element={<MinePage type="orders" user={user} openAuth={() => setAuthOpen(true)} />} />
+          <Route path="/admin" element={<AdminPage user={user} openAuth={() => setAuthOpen(true)} refreshNav={loadNavigation} />} />
+        </Routes>
+      </Layout>
+      {authOpen && <AuthModal close={() => setAuthOpen(false)} onAuthed={loadUser} />}
+    </ToastProvider>
+  );
+}
+
+function Layout({ children, nav, user, logout, openAuth, mobileOpen, setMobileOpen }) {
+  return (
+    <div className="shell">
+      <button className="mobile-menu" onClick={() => setMobileOpen(true)}>菜单</button>
+      <aside className={`sidebar ${mobileOpen ? "open" : ""}`}>
+        <div className="brand">
+          <div className="logo">IW</div>
+          <div>
+            <b>Issue Wiki</b>
+            <span>开源任务控制台</span>
+          </div>
+        </div>
+        <button className="sidebar-close" onClick={() => setMobileOpen(false)}>关闭</button>
+        <div className="search-box">搜索、筛选和文档都在主内容区完成</div>
+        <nav className="nav" onClick={() => setMobileOpen(false)}>
+          <div className="nav-label">工作区</div>
+          <NavLink to="/" end>赞助功能 <span className="badge">首页</span></NavLink>
+          {user && <NavLink to="/mine/tasks">我的需求</NavLink>}
+          {user && <NavLink to="/mine/orders">我的赞助</NavLink>}
+          {user?.role === "admin" && <NavLink to="/admin">管理员后台</NavLink>}
+          <div className="nav-label">文档</div>
+          <NavLink to="/docs">文档总览</NavLink>
+          {nav.documents?.slice(0, 10).map((doc) => <NavLink key={doc.id} to={`/docs/${doc.id}`}>{doc.title}</NavLink>)}
+        </nav>
+      </aside>
+      {mobileOpen && <div className="overlay" onClick={() => setMobileOpen(false)} />}
+      <main className="main">
+        <header className="topbar">
+          <div className="top-actions">
+            {user ? <span className="user-chip">{user.nickname}</span> : <button className="btn" onClick={openAuth}>登录</button>}
+            {user ? <button className="btn ghost" onClick={logout}>退出</button> : null}
+            <Link className="btn primary" to="/">赞助功能</Link>
+          </div>
+        </header>
+        {children}
+      </main>
+    </div>
+  );
+}
+
+function HomePage({ user, openAuth }) {
+  const [tasksPage, setTasksPage] = useState(() => emptyPage());
+  const [pagination, setPagination] = useState(defaultPageParams);
+  const [heroContent, setHeroContent] = useState("");
+  const [filters, setFilters] = useState({ name: "", status: defaultStatuses, sort_by: "sort_order", sort_order: "asc" });
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [demandOpen, setDemandOpen] = useState(false);
+  const [sponsorTask, setSponsorTask] = useState(null);
+  const [commentTask, setCommentTask] = useState(null);
+  const deferredName = useDeferredValue(filters.name);
+
+  async function loadTasks() {
+    setLoading(true);
+    setError("");
+    try {
+      const query = toQuery({ name: deferredName, status: filters.status, sort_by: filters.sort_by, sort_order: filters.sort_order, ...pagination });
+      setTasksPage(await request(`/tasks${query}`));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function loadHeroContent() {
+    const result = await request("/site/home-hero");
+    setHeroContent(result.content);
+  }
+
+  useEffect(() => {
+    loadHeroContent().catch((err) => setError(err.message));
+  }, []);
+
+  useEffect(() => {
+    loadTasks();
+  }, [deferredName, filters.status.join(","), filters.sort_by, filters.sort_order, pagination.page, pagination.page_size]);
+
+  function updateFilter(next) {
+    startTransition(() => setFilters((current) => ({ ...current, ...next })));
+    setPagination((current) => ({ ...current, page: 1 }));
+  }
+
+  const tasks = pageItems(tasksPage);
+  const totalSponsored = tasks.reduce((sum, task) => sum + Number(task.donated_amount || 0), 0);
+  const coCreators = tasks.reduce((sum, task) => sum + Number(task.co_creator_count || 0), 0);
+
+  return (
+    <>
+      <section className="hero-card">
+        <div className="hero-content">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{heroContent}</ReactMarkdown>
+        </div>
+        <div className="summary-grid">
+          <Metric title="公开任务" value={tasksPage.total} />
+          <Metric title="已赞助" value={`¥${totalSponsored.toFixed(2)}`} />
+          <Metric title="共创人数" value={coCreators} />
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-head stacked">
+          <div><h2>任务列表</h2><p>默认展示进行中和待启动任务，前三名展示金银铜效果。</p></div>
+          <div className="filters">
+            <input value={filters.name} placeholder="任务名称模糊查询" onChange={(event) => updateFilter({ name: event.target.value })} />
+            <select value={filters.sort_by} onChange={(event) => updateFilter({ sort_by: event.target.value })}>
+              <option value="sort_order">顺序</option>
+              <option value="name">名称</option>
+              <option value="start_amount">启动资金</option>
+              <option value="donated_amount">已赞助金额</option>
+            </select>
+            <select value={filters.sort_order} onChange={(event) => updateFilter({ sort_order: event.target.value })}>
+              <option value="asc">升序</option>
+              <option value="desc">降序</option>
+            </select>
+          </div>
+          <div className="status-filter">
+            {statusOptions.map((item) => (
+              <label key={item.value}>
+                <input
+                  type="checkbox"
+                  checked={filters.status.includes(item.value)}
+                  onChange={(event) => {
+                    const next = event.target.checked ? [...filters.status, item.value] : filters.status.filter((value) => value !== item.value);
+                    updateFilter({ status: next });
+                  }}
+                />
+                {item.label}
+              </label>
+            ))}
+          </div>
+          <button className="btn primary" onClick={() => (user ? setDemandOpen(true) : openAuth())}>提需求</button>
+        </div>
+        {error && <Notice type="error" message={error} />}
+        {loading ? <div className="empty">加载中...</div> : <TaskTable tasks={tasks} startIndex={(tasksPage.page - 1) * tasksPage.page_size} onSponsor={setSponsorTask} onComment={setCommentTask} />}
+        <Pagination pageData={tasksPage} loading={loading} onChange={(next) => setPagination((current) => ({ ...current, ...next }))} />
+      </section>
+
+      {demandOpen && <DemandModal user={user} openAuth={openAuth} close={() => setDemandOpen(false)} onDone={loadTasks} />}
+      {sponsorTask && <SponsorModal task={sponsorTask} close={() => setSponsorTask(null)} onDone={loadTasks} />}
+      {commentTask && <CommentsModal task={commentTask} user={user} openAuth={openAuth} close={() => setCommentTask(null)} onDone={loadTasks} />}
+    </>
+  );
+}
+
+function Metric({ title, value }) {
+  return <div className="metric"><span>{title}</span><b>{value}</b></div>;
+}
+
+function TaskTable({ tasks, onSponsor, onComment, startIndex = 0 }) {
+  if (!tasks.length) return <div className="empty">暂无任务</div>;
+  return (
+    <>
+      <div className="desktop-table">
+        <table>
+          <thead><tr><th>顺序</th><th>标题</th><th>创建日期</th><th>启动资金</th><th>已赞助</th><th>共创人数</th><th>状态</th><th>操作</th></tr></thead>
+          <tbody>
+            {tasks.map((task, index) => <TaskRow key={task.id} task={task} index={startIndex + index} onSponsor={onSponsor} onComment={onComment} />)}
+          </tbody>
+        </table>
+      </div>
+      <div className="mobile-cards">
+        {tasks.map((task, index) => <TaskCard key={task.id} task={task} index={startIndex + index} onSponsor={onSponsor} onComment={onComment} />)}
+      </div>
+    </>
+  );
+}
+
+function TaskRow({ task, index, onSponsor, onComment }) {
+  return (
+    <tr>
+      <td><Rank index={index} value={task.sort_order} /></td>
+      <td><b>{task.name}</b><small>{task.description.slice(0, 72)}...</small></td>
+      <td>{formatDate(task.created_at)}</td>
+      <td>¥{task.start_amount}</td>
+      <td>¥{task.donated_amount}</td>
+      <td>{task.co_creator_count}</td>
+      <td><span className="status">{task.status_label}</span></td>
+      <td><button className="link-btn" onClick={() => onComment(task)}>共创</button><button className="link-btn" onClick={() => onSponsor(task)}>赞助</button></td>
+    </tr>
+  );
+}
+
+function TaskCard({ task, index, onSponsor, onComment }) {
+  return (
+    <article className="task-card">
+      <div className="task-card-head"><Rank index={index} value={task.sort_order} /><span className="status">{task.status_label}</span></div>
+      <h3>{task.name}</h3>
+      <p>{task.description.slice(0, 120)}...</p>
+      <div className="card-stats"><span>启动 ¥{task.start_amount}</span><span>已赞助 ¥{task.donated_amount}</span><span>共创 {task.co_creator_count}</span></div>
+      <div className="row-actions"><button className="btn" onClick={() => onComment(task)}>共创</button><button className="btn primary" onClick={() => onSponsor(task)}>赞助</button></div>
+    </article>
+  );
+}
+
+function Rank({ index, value }) {
+  const cls = index === 0 ? "gold" : index === 1 ? "silver" : index === 2 ? "bronze" : "plain";
+  return <span className={`rank ${cls}`}>{index < 3 ? index + 1 : value}</span>;
+}
+
+function DemandModal({ user, openAuth, close, onDone }) {
+  const [form, setForm] = useState({ name: "", description: "" });
+  const [error, setError] = useState("");
+  const notify = useToast();
+  const { busy, runBusy } = useBusyActions();
+  const submitting = busy("submit-demand");
+
+  async function submit(event) {
+    event.preventDefault();
+    setError("");
+    await runBusy("submit-demand", async () => {
+      await request("/tasks/demands", { method: "POST", body: JSON.stringify(form) });
+      await onDone();
+      notify("需求已提交");
+      close();
+    }).catch((err) => setError(err.message));
+  }
+
+  return (
+    <Modal title="提需求" close={close}>
+      <form className="form" onSubmit={submit}>
+        <input placeholder="需求名称" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} />
+        <MarkdownEditor value={form.description} onChange={(description) => setForm({ ...form, description })} user={user} openAuth={openAuth} />
+        {error && <Notice type="error" message={error} />}
+        <button className="btn primary" disabled={submitting} aria-busy={submitting}>{loadingText(submitting, "提交待审核需求", "提交中...")}</button>
+      </form>
+    </Modal>
+  );
+}
+
+function SponsorModal({ task, close, onDone }) {
+  const [amount, setAmount] = useState("10.00");
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState("");
+  const notify = useToast();
+  const { busy, runBusy } = useBusyActions();
+  const creating = busy("create-sponsor-order");
+
+  async function submit(event) {
+    event.preventDefault();
+    setError("");
+    await runBusy("create-sponsor-order", async () => {
+      const order = await request(`/tasks/${task.id}/sponsor`, { method: "POST", body: JSON.stringify({ amount }) });
+      setResult(order);
+      await onDone();
+      notify("订单已创建");
+      if (order.payment_url) window.location.href = order.payment_url;
+    }).catch((err) => setError(err.message));
+  }
+
+  return (
+    <Modal title={`赞助：${task.name}`} close={close}>
+      <form className="form" onSubmit={submit}>
+        <p className="muted">最低赞助金额 10 元，游客会统一记录为游客赞助。</p>
+        <input type="number" min="10" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} />
+        {error && <Notice type="error" message={error} />}
+        {result && !result.payment_url && <Notice message={`订单已创建：${result.merchant_order_no}。请确认 Z-Pay 配置。`} />}
+        <button className="btn primary" disabled={creating} aria-busy={creating}>{loadingText(creating, "创建订单并付款", "创建中...")}</button>
+      </form>
+    </Modal>
+  );
+}
+
+function CommentsModal({ task, user, openAuth, close, onDone }) {
+  const [commentsPage, setCommentsPage] = useState(() => emptyPage());
+  const [pagination, setPagination] = useState(defaultPageParams);
+  const [commentsLoading, setCommentsLoading] = useState(true);
+  const [content, setContent] = useState("");
+  const [error, setError] = useState("");
+  const notify = useToast();
+  const { busy, runBusy } = useBusyActions();
+  const submitting = busy("submit-task-comment");
+
+  async function load() {
+    setCommentsLoading(true);
+    const query = toQuery(pagination);
+    try {
+      setCommentsPage(await request(`/tasks/${task.id}/comments${query}`));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setCommentsLoading(false);
+    }
+  }
+
+  useEffect(() => { load(); }, [task.id, pagination.page, pagination.page_size]);
+
+  async function submit(event) {
+    event.preventDefault();
+    if (!user) return openAuth();
+    setError("");
+    await runBusy("submit-task-comment", async () => {
+      await request(`/tasks/${task.id}/comments`, { method: "POST", body: JSON.stringify({ content }) });
+      setContent("");
+      await load();
+      await onDone();
+      notify("评论已发布，GitHub 后台同步中");
+    }).catch((err) => setError(err.message));
+  }
+
+  return (
+    <Modal title={`共创：${task.name}`} close={close} wide>
+      <div className="comment-list">
+        {commentsLoading ? <div className="empty">加载中...</div> : pageItems(commentsPage).map((item) => <Comment key={item.id} item={item} />)}
+        {!commentsLoading && !commentsPage.items.length && <div className="empty">暂无共创评论</div>}
+      </div>
+      <Pagination pageData={commentsPage} loading={commentsLoading} onChange={(next) => setPagination((current) => ({ ...current, ...next }))} />
+      {task.status === "completed" ? <Notice message="已完成任务不能继续共创，但仍可赞助。" /> : (
+        <form className="form" onSubmit={submit}>
+          <MarkdownEditor value={content} onChange={setContent} user={user} openAuth={openAuth} />
+          {error && <Notice type="error" message={error} />}
+          <button className="btn primary" disabled={submitting} aria-busy={submitting}>{loadingText(submitting, "发布共创评论", "发布中...")}</button>
+        </form>
+      )}
+    </Modal>
+  );
+}
+
+function DocumentsPage({ nav, user, openAuth }) {
+  const { documentId } = useParams();
+  const navigate = useNavigate();
+  const [doc, setDoc] = useState(null);
+  const [commentsPage, setCommentsPage] = useState(() => emptyPage());
+  const [pagination, setPagination] = useState(defaultPageParams);
+  const [docLoading, setDocLoading] = useState(false);
+  const [content, setContent] = useState("");
+  const [error, setError] = useState("");
+  const notify = useToast();
+  const { busy, runBusy } = useBusyActions();
+  const liking = doc ? busy(`like-document-${doc.id}`) : false;
+  const submittingComment = doc ? busy(`submit-document-comment-${doc.id}`) : false;
+
+  useEffect(() => {
+    if (!documentId && nav.documents?.length) navigate(`/docs/${nav.documents[0].id}`, { replace: true });
+  }, [documentId, nav.documents?.length]);
+
+  async function loadDoc() {
+    if (!documentId) return;
+    setDocLoading(true);
+    try {
+      setDoc(await request(`/documents/${documentId}`));
+      setCommentsPage(await request(`/documents/${documentId}/comments${toQuery(pagination)}`));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setDocLoading(false);
+    }
+  }
+
+  useEffect(() => { setPagination(defaultPageParams); }, [documentId]);
+  useEffect(() => { loadDoc(); }, [documentId, pagination.page, pagination.page_size]);
+
+  async function like() {
+    if (!doc) return;
+    await runBusy(`like-document-${doc.id}`, async () => {
+      const result = await request(`/documents/${doc.id}/likes`, { method: "POST" });
+      setDoc({ ...doc, like_count: result.count });
+      notify("已点赞");
+    }).catch((err) => {
+      setError(err.message);
+      notify("点赞失败", "error");
+    });
+  }
+
+  async function submitComment(event) {
+    event.preventDefault();
+    if (!user) return openAuth();
+    setError("");
+    await runBusy(`submit-document-comment-${doc.id}`, async () => {
+      await request(`/documents/${doc.id}/comments`, { method: "POST", body: JSON.stringify({ content }) });
+      setContent("");
+      await loadDoc();
+      notify("评论已发布");
+    }).catch((err) => setError(err.message));
+  }
+
+  if (!doc) {
+    return <section className="panel"><div className="empty">暂无文档，管理员可在后台创建。</div></section>;
+  }
+
+  return (
+    <section className="doc-layout">
+      <article className="panel doc-panel">
+        <div className="doc-head"><div><span className="label">文档</span><h2>{doc.title}</h2><p>作者：{doc.author}，更新于 {formatDate(doc.updated_at)}</p></div><button className="btn" disabled={liking} aria-busy={liking} onClick={like}>{loadingText(liking, `点赞 ${doc.like_count}`, "处理中...")}</button></div>
+        <div className="markdown-body"><ReactMarkdown remarkPlugins={[remarkGfm]}>{doc.content}</ReactMarkdown></div>
+      </article>
+      <aside className="panel comments-panel">
+        <div className="panel-head"><h2>文档评论</h2></div>
+        <div className="comment-list compact">{docLoading ? <div className="empty">加载中...</div> : pageItems(commentsPage).map((item) => <Comment key={item.id} item={item} />)}</div>
+        <Pagination pageData={commentsPage} loading={docLoading} onChange={(next) => setPagination((current) => ({ ...current, ...next }))} />
+        <form className="form" onSubmit={submitComment}>
+          <textarea placeholder="登录后评论文档" value={content} onChange={(event) => setContent(event.target.value)} />
+          {error && <Notice type="error" message={error} />}
+          <button className="btn primary" disabled={submittingComment} aria-busy={submittingComment}>{loadingText(submittingComment, "发表评论", "发布中...")}</button>
+        </form>
+      </aside>
+    </section>
+  );
+}
+
+function MinePage({ type, user, openAuth }) {
+  const [itemsPage, setItemsPage] = useState(() => emptyPage());
+  const [pagination, setPagination] = useState(defaultPageParams);
+  const [loading, setLoading] = useState(false);
+  const endpoint = type === "tasks" ? "/tasks/my" : "/tasks/sponsor-orders/my";
+
+  useEffect(() => {
+    if (!user) return;
+    setLoading(true);
+    request(`${endpoint}${toQuery(pagination)}`)
+      .then(setItemsPage)
+      .catch(() => setItemsPage(emptyPage(pagination)))
+      .finally(() => setLoading(false));
+  }, [type, user?.id, pagination.page, pagination.page_size]);
+
+  useEffect(() => {
+    setPagination(defaultPageParams);
+  }, [type]);
+
+  if (!user) return <Gate openAuth={openAuth} />;
+
+  return (
+    <section className="panel">
+      <div className="panel-head"><h2>{type === "tasks" ? "我的需求" : "我的赞助"}</h2></div>
+      {loading ? <div className="empty">加载中...</div> : type === "tasks" ? <TaskTable tasks={pageItems(itemsPage)} startIndex={(itemsPage.page - 1) * itemsPage.page_size} onSponsor={() => {}} onComment={() => {}} /> : <OrderList orders={pageItems(itemsPage)} />}
+      <Pagination pageData={itemsPage} loading={loading} onChange={(next) => setPagination((current) => ({ ...current, ...next }))} />
+    </section>
+  );
+}
+
+function AdminPage({ user, openAuth, refreshNav }) {
+  const [tab, setTab] = useState("tasks");
+  const [data, setData] = useState({
+    tasks: emptyPage(),
+    documents: emptyPage(),
+    folders: emptyPage({ page: 1, page_size: 100 }),
+    users: emptyPage(),
+    comments: emptyPage(),
+    orders: emptyPage(),
+  });
+  const [adminPaging, setAdminPaging] = useState({
+    tasks: defaultPageParams,
+    documents: defaultPageParams,
+    users: defaultPageParams,
+    comments: defaultPageParams,
+    orders: defaultPageParams,
+  });
+  const [adminTaskFilters, setAdminTaskFilters] = useState(createDefaultAdminTaskFilters);
+  const [heroContent, setHeroContent] = useState("");
+  const [taskForm, setTaskForm] = useState({ name: "", description: "", start_amount: "0", status: "pending_start" });
+  const [taskDrawerOpen, setTaskDrawerOpen] = useState(false);
+  const [taskDrawerHeight, setTaskDrawerHeight] = useState(72);
+  const [taskDetail, setTaskDetail] = useState(null);
+  const [taskDetailComments, setTaskDetailComments] = useState(() => emptyPage());
+  const [taskDetailPaging, setTaskDetailPaging] = useState(defaultPageParams);
+  const [taskDetailLoading, setTaskDetailLoading] = useState(false);
+  const [folderForm, setFolderForm] = useState({ name: "" });
+  const [docForm, setDocForm] = useState({ title: "", content: "", folder_id: "", author: "生产力Mark" });
+  const [githubSyncResult, setGithubSyncResult] = useState(null);
+  const [adminLoading, setAdminLoading] = useState(false);
+  const [error, setError] = useState("");
+  const notify = useToast();
+  const { busy, runBusy } = useBusyActions();
+  const activePaging = adminPaging[tab] || defaultPageParams;
+  const deferredAdminTaskQuery = useDeferredValue(adminTaskFilters.q);
+
+  function updateAdminPaging(key, patch) {
+    setAdminPaging((current) => ({ ...current, [key]: { ...(current[key] || defaultPageParams), ...patch } }));
+  }
+
+  function updateAdminTaskFilters(patch) {
+    startTransition(() => setAdminTaskFilters((current) => ({ ...current, ...patch })));
+    updateAdminPaging("tasks", { page: 1 });
+  }
+
+  function resetAdminTaskFilters() {
+    setAdminTaskFilters(createDefaultAdminTaskFilters());
+    updateAdminPaging("tasks", { page: 1 });
+  }
+
+  function adminTaskQueryParams() {
+    return {
+      ...activePaging,
+      q: deferredAdminTaskQuery.trim(),
+      status: adminTaskFilters.status.length ? adminTaskFilters.status : undefined,
+      source: adminTaskFilters.source.length ? adminTaskFilters.source : undefined,
+      visibility: adminTaskFilters.visibility,
+      github_sync: adminTaskFilters.github_sync,
+      github_issue_number: adminTaskFilters.github_issue_number,
+      created_from: adminTaskFilters.created_from,
+      created_to: adminTaskFilters.created_to,
+    };
+  }
+
+  function openTaskDetail(task) {
+    setTaskDetail(task);
+    setTaskDetailComments(emptyPage());
+    setTaskDetailPaging(defaultPageParams);
+  }
+
+  async function loadTaskDetail(taskId = taskDetail?.id) {
+    if (!taskId) return;
+    setTaskDetailLoading(true);
+    try {
+      const [detail, comments] = await Promise.all([
+        request(`/admin/tasks/${taskId}`),
+        request(`/admin/tasks/${taskId}/comments${toQuery(taskDetailPaging)}`),
+      ]);
+      setTaskDetail(detail);
+      setTaskDetailComments(comments);
+    } catch (err) {
+      setError(err.message);
+      notify("任务详情加载失败", "error");
+    } finally {
+      setTaskDetailLoading(false);
+    }
+  }
+
+  async function load() {
+    if (!user || user.role !== "admin") return;
+    setAdminLoading(true);
+    const next = { ...data };
+    try {
+      if (tab === "tasks") next.tasks = await request(`/admin/tasks${toQuery(adminTaskQueryParams())}`);
+      if (tab === "documents") {
+        next.documents = await request(`/admin/documents${toQuery(activePaging)}`);
+        next.folders = await request(`/admin/folders${toQuery({ page: 1, page_size: 100 })}`);
+      }
+      if (tab === "users") next.users = await request(`/admin/users${toQuery(activePaging)}`);
+      if (tab === "comments") next.comments = await request(`/admin/comments${toQuery(activePaging)}`);
+      if (tab === "orders") next.orders = await request(`/admin/orders${toQuery(activePaging)}`);
+      if (tab === "home") {
+        const result = await request("/admin/home-hero");
+        setHeroContent(result.content);
+      }
+      setData(next);
+    } finally {
+      setAdminLoading(false);
+    }
+  }
+
+  useEffect(() => { load().catch((err) => setError(err.message)); }, [
+    tab,
+    user?.id,
+    activePaging.page,
+    activePaging.page_size,
+    deferredAdminTaskQuery,
+    adminTaskFilters.status.join(","),
+    adminTaskFilters.source.join(","),
+    adminTaskFilters.visibility,
+    adminTaskFilters.github_sync,
+    adminTaskFilters.github_issue_number,
+    adminTaskFilters.created_from,
+    adminTaskFilters.created_to,
+  ]);
+  useEffect(() => { if (taskDetail?.id) loadTaskDetail(taskDetail.id); }, [taskDetail?.id, taskDetailPaging.page, taskDetailPaging.page_size]);
+
+  if (!user) return <Gate openAuth={openAuth} />;
+  if (user.role !== "admin") return <section className="panel"><div className="empty">需要管理员权限</div></section>;
+
+  async function createTask(event) {
+    event.preventDefault();
+    setError("");
+    await runBusy("admin-create-task", async () => {
+      await request("/admin/tasks", { method: "POST", body: JSON.stringify(taskForm) });
+      setTaskForm({ name: "", description: "", start_amount: "0", status: "pending_start" });
+      setTaskDrawerOpen(false);
+      await load();
+      notify("任务已创建");
+    }).catch((err) => setError(err.message));
+  }
+
+  async function updateTask(task, patch) {
+    setError("");
+    await runBusy(`admin-update-task-${task.id}`, async () => {
+      await request(`/admin/tasks/${task.id}`, { method: "PUT", body: JSON.stringify(patch) });
+      await load();
+      if (taskDetail?.id === task.id) await loadTaskDetail(task.id);
+      notify("已保存，GitHub 后台同步中");
+    }).catch((err) => setError(err.message));
+  }
+
+  async function createFolder(event) {
+    event.preventDefault();
+    setError("");
+    await runBusy("admin-create-folder", async () => {
+      await request("/admin/folders", { method: "POST", body: JSON.stringify(folderForm) });
+      setFolderForm({ name: "" });
+      await load();
+      await refreshNav();
+      notify("文件夹已创建");
+    }).catch((err) => setError(err.message));
+  }
+
+  async function createDocument(event) {
+    event.preventDefault();
+    setError("");
+    await runBusy("admin-create-document", async () => {
+      const payload = { ...docForm, folder_id: docForm.folder_id ? Number(docForm.folder_id) : null };
+      await request("/admin/documents", { method: "POST", body: JSON.stringify(payload) });
+      setDocForm({ title: "", content: "", folder_id: "", author: "生产力Mark" });
+      await load();
+      await refreshNav();
+      notify("文档已创建");
+    }).catch((err) => setError(err.message));
+  }
+
+  async function commentAction(target, id, action, body) {
+    setError("");
+    await runBusy(`admin-comment-${target}-${id}-${action}`, async () => {
+      const method = action === "delete" ? "DELETE" : "POST";
+      await request(`/admin/comments/${target}/${id}${action === "delete" ? "" : `/${action}`}`, { method, body: body ? JSON.stringify(body) : undefined });
+      await load();
+      notify(action === "delete" && target === "task" ? "评论已删除，GitHub 后台同步中" : { confirm: "评论已确认", reply: "回复已保存", delete: "评论已删除" }[action] || "操作已保存");
+    }).catch((err) => setError(err.message));
+  }
+
+  async function saveHeroContent(event) {
+    event.preventDefault();
+    setError("");
+    await runBusy("admin-save-hero", async () => {
+      const result = await request("/admin/home-hero", { method: "PUT", body: JSON.stringify({ content: heroContent }) });
+      setHeroContent(result.content);
+      notify("首页内容已保存");
+    }).catch((err) => setError(err.message));
+  }
+
+  async function updateUserStatus(item) {
+    setError("");
+    await runBusy(`admin-user-status-${item.id}`, async () => {
+      await request(`/admin/users/${item.id}/${item.is_banned ? "unban" : "ban"}`, { method: "POST" });
+      await load();
+      notify("用户状态已更新");
+    }).catch((err) => setError(err.message));
+  }
+
+  async function syncHistoricalIssues() {
+    setError("");
+    await runBusy("admin-sync-github", async () => {
+      const result = await request("/admin/github/sync-issues", { method: "POST" });
+      setGithubSyncResult(result);
+      await load();
+      notify(`GitHub 同步完成：导入 ${result.imported}，跳过 ${result.skipped}，失败 ${result.failed}`);
+    }).catch((err) => {
+      setError(err.message);
+      notify("GitHub 同步失败", "error");
+    });
+  }
+
+  return (
+    <section className="admin-page">
+      <div className="admin-tabs">
+        {[
+          ["tasks", "任务管理"], ["home", "首页 Hero"], ["documents", "文档管理"], ["users", "用户管理"], ["comments", "评论管理"], ["orders", "订单管理"],
+        ].map(([key, label]) => <button key={key} className={tab === key ? "active" : ""} disabled={adminLoading} onClick={() => setTab(key)}>{label}</button>)}
+      </div>
+      {error && <Notice type="error" message={error} />}
+      {tab === "home" && <div className="panel admin-panel">
+        <div className="panel-head"><h2>Hero Card 内容编辑</h2></div>
+        <form className="form" onSubmit={saveHeroContent}>
+          <MarkdownEditor value={heroContent} onChange={setHeroContent} user={user} openAuth={openAuth} />
+          <button className="btn primary" disabled={busy("admin-save-hero")} aria-busy={busy("admin-save-hero")}>{loadingText(busy("admin-save-hero"), "保存首页内容", "保存中...")}</button>
+        </form>
+      </div>}
+      {tab === "tasks" && <div className="panel admin-panel">
+        <div className="panel-head">
+          <div><h2>任务管理</h2><p>审核通过的本地需求会自动同步到 GitHub issue。</p></div>
+          <div className="row-actions">
+            <button className="btn primary" onClick={() => setTaskDrawerOpen(true)}>新增任务</button>
+            <button className="btn" disabled={busy("admin-sync-github")} aria-busy={busy("admin-sync-github")} onClick={syncHistoricalIssues}>{loadingText(busy("admin-sync-github"), "同步历史任务", "同步中...")}</button>
+          </div>
+        </div>
+        <AdminTaskFilters filters={adminTaskFilters} loading={adminLoading} updateFilters={updateAdminTaskFilters} resetFilters={resetAdminTaskFilters} />
+        {githubSyncResult && <Notice message={`GitHub 历史同步：导入 ${githubSyncResult.imported}，评论 ${githubSyncResult.comments_imported}，跳过 ${githubSyncResult.skipped}，失败 ${githubSyncResult.failed}`} />}
+        {adminLoading ? <div className="empty">加载中...</div> : <TaskAdminList tasks={pageItems(data.tasks)} updateTask={updateTask} openDetail={openTaskDetail} busy={busy} />}
+        <Pagination pageData={data.tasks} loading={adminLoading} onChange={(next) => updateAdminPaging("tasks", next)} />
+      </div>}
+      {tab === "documents" && <div className="panel admin-panel">
+        <div className="panel-head"><h2>文档和文件夹管理</h2></div>
+        <form className="inline-form" onSubmit={createFolder}><input placeholder="文件夹名称" value={folderForm.name} onChange={(event) => setFolderForm({ name: event.target.value })} /><button className="btn" disabled={busy("admin-create-folder")} aria-busy={busy("admin-create-folder")}>{loadingText(busy("admin-create-folder"), "创建文件夹", "创建中...")}</button></form>
+        <form className="form" onSubmit={createDocument}>
+          <div className="inline-form"><input placeholder="文档标题" value={docForm.title} onChange={(event) => setDocForm({ ...docForm, title: event.target.value })} /><select value={docForm.folder_id} onChange={(event) => setDocForm({ ...docForm, folder_id: event.target.value })}><option value="">根目录</option>{pageItems(data.folders).map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select><button className="btn primary" disabled={busy("admin-create-document")} aria-busy={busy("admin-create-document")}>{loadingText(busy("admin-create-document"), "创建文档", "创建中...")}</button></div>
+          <MarkdownEditor value={docForm.content} onChange={(content) => setDocForm({ ...docForm, content })} user={user} openAuth={openAuth} />
+        </form>
+        {adminLoading ? <div className="empty">加载中...</div> : <div className="admin-list">{pageItems(data.documents).map((doc) => <div key={doc.id} className="admin-row"><b>{doc.title}</b><span>{doc.author}</span><Link to={`/docs/${doc.id}`}>查看</Link></div>)}</div>}
+        <Pagination pageData={data.documents} loading={adminLoading} onChange={(next) => updateAdminPaging("documents", next)} />
+      </div>}
+      {tab === "users" && <div className="panel admin-panel"><div className="panel-head"><h2>用户管理</h2></div>{adminLoading ? <div className="empty">加载中...</div> : <div className="admin-list">{pageItems(data.users).map((item) => { const userBusy = busy(`admin-user-status-${item.id}`); return <div key={item.id} className="admin-row"><b>{item.nickname}</b><span>{item.email || item.phone}</span><span>{item.is_banned ? "已封禁" : "正常"}</span><button className="btn" disabled={userBusy} aria-busy={userBusy} onClick={() => updateUserStatus(item)}>{loadingText(userBusy, item.is_banned ? "解封" : "封禁", "处理中...")}</button></div>; })}</div>}<Pagination pageData={data.users} loading={adminLoading} onChange={(next) => updateAdminPaging("users", next)} /></div>}
+      {tab === "comments" && <div className="panel admin-panel"><div className="panel-head"><h2>评论管理</h2></div>{adminLoading ? <div className="empty">加载中...</div> : <CommentAdminList comments={pageItems(data.comments)} action={commentAction} busy={busy} />}<Pagination pageData={data.comments} loading={adminLoading} onChange={(next) => updateAdminPaging("comments", next)} /></div>}
+      {tab === "orders" && <div className="panel admin-panel"><div className="panel-head"><h2>订单管理</h2></div>{adminLoading ? <div className="empty">加载中...</div> : <OrderList orders={pageItems(data.orders)} />}<Pagination pageData={data.orders} loading={adminLoading} onChange={(next) => updateAdminPaging("orders", next)} /></div>}
+      {taskDetail && <TaskDetailModal task={taskDetail} commentsPage={taskDetailComments} loading={taskDetailLoading} close={() => setTaskDetail(null)} onPageChange={(next) => setTaskDetailPaging((current) => ({ ...current, ...next }))} />}
+      <BottomDrawer title="新增任务" open={taskDrawerOpen} height={taskDrawerHeight} setHeight={setTaskDrawerHeight} close={() => setTaskDrawerOpen(false)}>
+        <form className="form drawer-form" onSubmit={createTask}>
+          <div className="inline-form drawer-inline">
+            <input placeholder="任务名称" value={taskForm.name} onChange={(event) => setTaskForm({ ...taskForm, name: event.target.value })} />
+            <input type="number" placeholder="启动资金" value={taskForm.start_amount} onChange={(event) => setTaskForm({ ...taskForm, start_amount: event.target.value })} />
+            <select value={taskForm.status} onChange={(event) => setTaskForm({ ...taskForm, status: event.target.value })}>{statusOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select>
+          </div>
+          <MarkdownEditor value={taskForm.description} onChange={(description) => setTaskForm({ ...taskForm, description })} user={user} openAuth={openAuth} />
+          <div className="drawer-actions"><button type="button" className="btn" onClick={() => setTaskDrawerOpen(false)}>取消</button><button className="btn primary" disabled={busy("admin-create-task")} aria-busy={busy("admin-create-task")}>{loadingText(busy("admin-create-task"), "创建任务", "创建中...")}</button></div>
+        </form>
+      </BottomDrawer>
+    </section>
+  );
+}
+
+function AdminTaskFilters({ filters, loading, updateFilters, resetFilters }) {
+  function toggleArrayValue(key, value, checked) {
+    const current = filters[key] || [];
+    const next = checked ? [...current, value] : current.filter((item) => item !== value);
+    updateFilters({ [key]: next });
+  }
+
+  return (
+    <div className="admin-task-filters">
+      <div className="filters admin-task-filter-row">
+        <input
+          value={filters.q}
+          placeholder="关键词 / GitHub 作者 / Issue"
+          disabled={loading}
+          onChange={(event) => updateFilters({ q: event.target.value })}
+        />
+        <input
+          type="number"
+          min="1"
+          value={filters.github_issue_number}
+          placeholder="Issue 编号"
+          disabled={loading}
+          onChange={(event) => updateFilters({ github_issue_number: event.target.value })}
+        />
+        <select value={filters.visibility} disabled={loading} onChange={(event) => updateFilters({ visibility: event.target.value })}>
+          {visibilityOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+        </select>
+        <select value={filters.github_sync} disabled={loading} onChange={(event) => updateFilters({ github_sync: event.target.value })}>
+          {githubSyncOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+        </select>
+        <input type="date" value={filters.created_from} disabled={loading} onChange={(event) => updateFilters({ created_from: event.target.value })} />
+        <input type="date" value={filters.created_to} disabled={loading} onChange={(event) => updateFilters({ created_to: event.target.value })} />
+        <button type="button" className="btn" disabled={loading} onClick={resetFilters}>重置</button>
+      </div>
+      <div className="status-filter admin-task-filter-checks">
+        <span className="filter-label">状态</span>
+        {statusOptions.map((item) => (
+          <label key={item.value}>
+            <input
+              type="checkbox"
+              checked={filters.status.includes(item.value)}
+              disabled={loading}
+              onChange={(event) => toggleArrayValue("status", item.value, event.target.checked)}
+            />
+            {item.label}
+          </label>
+        ))}
+      </div>
+      <div className="status-filter admin-task-filter-checks">
+        <span className="filter-label">来源</span>
+        {sourceOptions.map((item) => (
+          <label key={item.value}>
+            <input
+              type="checkbox"
+              checked={filters.source.includes(item.value)}
+              disabled={loading}
+              onChange={(event) => toggleArrayValue("source", item.value, event.target.checked)}
+            />
+            {item.label}
+          </label>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function TaskAdminList({ tasks, updateTask, openDetail, busy }) {
+  return (
+    <div className="admin-list">
+      {tasks.map((task) => {
+        const completed = task.status === "completed";
+        const taskBusy = busy(`admin-update-task-${task.id}`);
+        return (
+          <div key={task.id} className="admin-row task-admin">
+            <button type="button" className="task-title-btn" onClick={() => openDetail(task)}><b>{task.sort_order}. {task.name}</b></button>
+            <span className="source-chip">{sourceLabel(task.source)}</span>
+            <span>{task.github_issue_url ? <a href={task.github_issue_url} target="_blank" rel="noreferrer">Issue #{task.github_issue_number}</a> : "未同步"}</span>
+            <span className={task.github_sync_error ? "sync-error" : "sync-ok"} title={task.github_sync_error || ""}>{task.github_sync_error ? "同步失败" : task.last_github_sync_at ? "已同步" : "待同步"}</span>
+            <span>¥{task.start_amount} / ¥{task.donated_amount}</span>
+            <button className="btn" disabled={completed || taskBusy} aria-busy={taskBusy} onClick={() => updateTask(task, { status: "pending_start" })}>{completed ? "已完成" : loadingText(taskBusy, "通过", "保存中...")}</button>
+            <button className="btn" disabled={taskBusy} aria-busy={taskBusy} onClick={() => updateTask(task, { is_hidden: !task.is_hidden })}>{loadingText(taskBusy, task.is_hidden ? "取消隐藏" : "隐藏", "保存中...")}</button>
+            <select value={task.status} disabled={taskBusy} aria-busy={taskBusy} onChange={(event) => updateTask(task, { status: event.target.value })}>{statusOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function TaskDetailModal({ task, commentsPage, loading, close, onPageChange }) {
+  const comments = pageItems(commentsPage);
+  return (
+    <Modal title={`任务详情：${task.name}`} close={close} wide>
+      <div className="task-detail">
+        <div className="task-detail-grid">
+          <DetailItem label="状态" value={task.status_label} />
+          <DetailItem label="来源" value={sourceLabel(task.source)} />
+          <DetailItem label="可见性" value={task.is_hidden ? "已隐藏" : "公开"} />
+          <DetailItem label="排序" value={task.sort_order} />
+          <DetailItem label="资金" value={`¥${task.start_amount} / ¥${task.donated_amount}`} />
+          <DetailItem label="共创人数" value={task.co_creator_count} />
+          <DetailItem label="创建时间" value={formatDate(task.created_at)} />
+          <DetailItem label="更新时间" value={formatDate(task.updated_at)} />
+          <DetailItem label="GitHub" value={task.github_issue_url ? <a href={task.github_issue_url} target="_blank" rel="noreferrer">Issue #{task.github_issue_number}</a> : "未同步"} />
+          <DetailItem label="同步状态" value={task.github_sync_error ? "同步失败" : task.last_github_sync_at ? "已同步" : "待同步"} />
+        </div>
+        {task.github_sync_error && <Notice type="error" message={task.github_sync_error} />}
+        <section className="task-detail-section">
+          <h3>任务描述</h3>
+          <div className="task-detail-markdown markdown-body">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{task.description || "暂无描述"}</ReactMarkdown>
+          </div>
+        </section>
+        <section className="task-detail-section">
+          <h3>评论</h3>
+          {loading ? <div className="empty">加载评论中...</div> : (
+            <div className="task-detail-comments">
+              {comments.map((item) => <TaskDetailComment key={item.id} item={item} />)}
+              {!comments.length && <div className="empty">暂无评论</div>}
+            </div>
+          )}
+          <Pagination pageData={commentsPage} loading={loading} onChange={onPageChange} />
+        </section>
+      </div>
+    </Modal>
+  );
+}
+
+function DetailItem({ label, value }) {
+  return <div className="detail-item"><span>{label}</span><b>{value}</b></div>;
+}
+
+function TaskDetailComment({ item }) {
+  return (
+    <article className="detail-comment">
+      <div className="detail-comment-head">
+        <div><b>{item.user_nickname || item.user || "未知用户"}</b><span>{formatDate(item.created_at)} · {item.is_confirmed ? "已确认" : "未确认"}</span></div>
+        {item.github_comment_id && <span className="source-chip">GitHub #{item.github_comment_id}</span>}
+      </div>
+      <div className="detail-comment-body">
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{item.content || "暂无内容"}</ReactMarkdown>
+      </div>
+      {item.admin_reply && <blockquote>管理员回复：{item.admin_reply}</blockquote>}
+      {item.github_sync_error && <Notice type="error" message={item.github_sync_error} />}
+    </article>
+  );
+}
+
+function sourceLabel(source) {
+  if (source === "github") return "GitHub";
+  if (source === "user") return "用户需求";
+  return "管理员";
+}
+
+function CommentAdminList({ comments, action, busy }) {
+  const all = comments.map((item) => ({ ...item, label: `${item.target === "task" ? "任务" : "文档"} #${item.target_id}` }));
+  return <div className="admin-list">{all.map((item) => {
+    const confirmBusy = busy(`admin-comment-${item.target}-${item.id}-confirm`);
+    const replyBusy = busy(`admin-comment-${item.target}-${item.id}-reply`);
+    const deleteBusy = busy(`admin-comment-${item.target}-${item.id}-delete`);
+    return <div key={`${item.target}-${item.id}`} className="admin-row comment-admin"><b>{item.label}</b><span>{item.user}</span><p>{item.content}</p><button className="btn" disabled={confirmBusy} aria-busy={confirmBusy} onClick={() => action(item.target, item.id, "confirm")}>{loadingText(confirmBusy, "确认", "处理中...")}</button><button className="btn" disabled={replyBusy} aria-busy={replyBusy} onClick={() => { if (busy(`admin-comment-${item.target}-${item.id}-reply`)) return; const admin_reply = prompt("回复内容", item.admin_reply || ""); if (admin_reply === null) return; action(item.target, item.id, "reply", { admin_reply }); }}>{loadingText(replyBusy, "回复", "保存中...")}</button><button className="btn danger" disabled={deleteBusy} aria-busy={deleteBusy} onClick={() => action(item.target, item.id, "delete")}>{loadingText(deleteBusy, "删除", "处理中...")}</button></div>;
+  })}</div>;
+}
+
+function OrderList({ orders }) {
+  if (!orders.length) return <div className="empty">暂无订单</div>;
+  return <div className="admin-list">{orders.map((order) => <div key={order.id} className="admin-row"><b>{order.merchant_order_no}</b><span>任务 #{order.task_id}</span><span>¥{order.amount}</span><span>{order.status}</span><span>{formatDate(order.created_at)}</span></div>)}</div>;
+}
+
+function Pagination({ pageData, onChange, loading = false }) {
+  const page = pageData?.page || 1;
+  const pageSize = pageData?.page_size || 20;
+  const pages = pageData?.pages || 1;
+  const total = pageData?.total || 0;
+  if (!pageData) return null;
+  return (
+    <div className="pagination">
+      <span>共 {total} 条，第 {page} / {pages} 页</span>
+      <div className="pagination-actions">
+        <button className="btn" disabled={loading || page <= 1} aria-busy={loading} onClick={() => onChange({ page: 1 })}>首页</button>
+        <button className="btn" disabled={loading || page <= 1} aria-busy={loading} onClick={() => onChange({ page: page - 1 })}>上一页</button>
+        <button className="btn" disabled={loading || page >= pages} aria-busy={loading} onClick={() => onChange({ page: page + 1 })}>下一页</button>
+        <button className="btn" disabled={loading || page >= pages} aria-busy={loading} onClick={() => onChange({ page: pages })}>末页</button>
+        <select value={pageSize} disabled={loading} aria-busy={loading} onChange={(event) => onChange({ page: 1, page_size: Number(event.target.value) })}>
+          {pageSizeOptions.map((size) => <option key={size} value={size}>{size} 条/页</option>)}
+        </select>
+      </div>
+    </div>
+  );
+}
+
+function BottomDrawer({ title, open, height, setHeight, close, children }) {
+  const dragRef = useRef(null);
+  const drawerRef = useRef(null);
+  const handleKeyDown = useOverlayFocus(drawerRef, close, open);
+  if (!open) return null;
+
+  function startDrag(event) {
+    event.preventDefault();
+    const startY = event.clientY;
+    const startHeight = height;
+    function move(moveEvent) {
+      const delta = ((startY - moveEvent.clientY) / window.innerHeight) * 100;
+      setHeight(Math.min(92, Math.max(42, startHeight + delta)));
+    }
+    function stop() {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+    }
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop);
+  }
+
+  return (
+    <div className="drawer-backdrop" onClick={close}>
+      <section
+        className="bottom-drawer"
+        ref={drawerRef}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        style={{ height: `${height}vh` }}
+        onClick={(event) => event.stopPropagation()}
+        onKeyDown={handleKeyDown}
+      >
+        <div className="drawer-handle" ref={dragRef} onPointerDown={startDrag} />
+        <div className="drawer-head"><h2>{title}</h2><button onClick={close}>关闭</button></div>
+        <div className="drawer-body">{children}</div>
+      </section>
+    </div>
+  );
+}
+
+function MarkdownEditor({ value, onChange, user, openAuth, compact = false }) {
+  const [uploading, setUploading] = useState(false);
+  const editorRef = useRef(null);
+  const selectionRef = useRef(null);
+  const valueRef = useRef(value || "");
+  const notify = useToast();
+
+  useEffect(() => {
+    valueRef.current = value || "";
+  }, [value]);
+
+  function updateValue(next) {
+    valueRef.current = next;
+    onChange(next);
+  }
+
+  function ensureCanUpload() {
+    if (user) return true;
+    notify("请先登录后上传文件", "info");
+    openAuth?.();
+    return false;
+  }
+
+  function fileToMarkdown(uploaded) {
+    const filename = cleanFilename(uploaded.original_filename);
+    const isImage = uploaded.mime_type.startsWith("image/");
+    return isImage ? `![${filename}](${uploaded.url})` : `[${filename}](${uploaded.url})`;
+  }
+
+  function cleanFilename(filename) {
+    return (filename || "upload").replace(/[\[\]\r\n]/g, "");
+  }
+
+  function createUploadPlaceholder(file, index) {
+    const id = `upload-${Date.now()}-${index}-${Math.random().toString(36).slice(2)}`;
+    const filename = cleanFilename(file.name || `附件${index + 1}`);
+    return {
+      id,
+      file,
+      filename,
+      markdown: `<!-- ${id} -->\n> 正在上传：${filename}...\n<!-- /${id} -->`,
+    };
+  }
+
+  function replaceUploadPlaceholder(id, markdown) {
+    const text = valueRef.current || "";
+    const pattern = new RegExp(`<!-- ${escapeRegExp(id)} -->[\\s\\S]*?<!-- /${escapeRegExp(id)} -->`);
+    if (!pattern.test(text)) return;
+    updateValue(text.replace(pattern, markdown));
+  }
+
+  function escapeRegExp(text) {
+    return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
+  function insertMarkdown(markdown, selection) {
+    const text = valueRef.current || "";
+    const start = selection?.start ?? text.length;
+    const end = selection?.end ?? text.length;
+    const before = text.slice(0, start);
+    const after = text.slice(end);
+    const prefix = before && !before.endsWith("\n") ? "\n" : "";
+    const suffix = after && !after.startsWith("\n") ? "\n" : "";
+    const inserted = `${prefix}${markdown}${suffix}`;
+    updateValue(`${before}${inserted}${after}`);
+    window.requestAnimationFrame(() => {
+      const textarea = editorRef.current?.querySelector("textarea");
+      if (!textarea) return;
+      const cursor = start + inserted.length;
+      selectionRef.current = { start: cursor, end: cursor };
+      textarea.focus();
+      textarea.setSelectionRange(cursor, cursor);
+    });
+  }
+
+  async function uploadFiles(files, selection) {
+    if (uploading) return;
+    const list = Array.from(files || []).filter(Boolean);
+    if (!list.length || !ensureCanUpload()) return;
+    const placeholders = list.map(createUploadPlaceholder);
+    insertMarkdown(placeholders.map((item) => item.markdown).join("\n\n"), selection);
+    setUploading(true);
+    let uploadedCount = 0;
+    try {
+      for (const item of placeholders) {
+        try {
+          const uploaded = await uploadFile(item.file);
+          replaceUploadPlaceholder(item.id, fileToMarkdown(uploaded));
+          uploadedCount += 1;
+        } catch (err) {
+          replaceUploadPlaceholder(item.id, `> 上传失败：${item.filename}，请重试`);
+          notify(`${item.filename} 上传失败`, "error");
+        }
+      }
+      if (uploadedCount) notify(uploadedCount > 1 ? `${uploadedCount} 个附件已上传` : "附件已上传");
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function onFile(event) {
+    await uploadFiles(event.target.files, selectionRef.current);
+    event.target.value = "";
+  }
+
+  function rememberSelection(event) {
+    selectionRef.current = { start: event.currentTarget.selectionStart, end: event.currentTarget.selectionEnd };
+  }
+
+  function onPaste(event) {
+    const files = Array.from(event.clipboardData?.files || []);
+    if (!files.length) return;
+    event.preventDefault();
+    uploadFiles(files, { start: event.currentTarget.selectionStart, end: event.currentTarget.selectionEnd });
+  }
+
+  return (
+    <div className={`markdown-editor ${compact ? "compact" : ""}`} data-color-mode="light" ref={editorRef}>
+      <div className="editor-uploadbar">
+        <span>支持 Markdown，可粘贴图片或文件自动上传</span>
+        <label className={`file-btn ${uploading ? "disabled" : ""}`} aria-busy={uploading}>{uploading ? "上传中..." : "上传附件"}<input type="file" multiple disabled={uploading} onChange={onFile} /></label>
+      </div>
+      <MDEditor
+        value={value}
+        onChange={(next) => updateValue(next || "")}
+        preview="live"
+        height={compact ? 280 : 360}
+        commands={[
+          commands.bold,
+          commands.italic,
+          commands.strikethrough,
+          commands.divider,
+          commands.group([commands.title1, commands.title2, commands.title3], { name: "title", groupName: "title", buttonProps: { "aria-label": "插入标题" } }),
+          commands.divider,
+          commands.link,
+          commands.quote,
+          commands.code,
+          commands.codeBlock,
+          commands.table,
+          commands.divider,
+          commands.unorderedListCommand,
+          commands.orderedListCommand,
+          commands.checkedListCommand,
+        ]}
+        extraCommands={[commands.codeEdit, commands.codeLive, commands.codePreview, commands.fullscreen]}
+        previewOptions={{ remarkPlugins: [remarkGfm] }}
+        textareaProps={{ placeholder: "输入 Markdown，或直接粘贴图片/文件上传", onPaste, onSelect: rememberSelection, onClick: rememberSelection, onKeyUp: rememberSelection }}
+      />
+    </div>
+  );
+}
+
+function AuthModal({ close, onAuthed }) {
+  const [mode, setMode] = useState("login");
+  const [form, setForm] = useState({ account: "", password: "", nickname: "", code: "", new_password: "" });
+  const [error, setError] = useState("");
+  const notify = useToast();
+  const { busy, runBusy } = useBusyActions();
+  const authSubmitting = busy("auth-submit");
+  const codeSending = busy(`auth-code-${mode}`);
+
+  async function sendCode(purpose) {
+    setError("");
+    await runBusy(`auth-code-${purpose}`, async () => {
+      await request("/auth/send-code", { method: "POST", body: JSON.stringify({ target: form.account, purpose }) });
+      notify("验证码已发送");
+    }).catch((err) => setError(err.message));
+  }
+
+  async function submit(event) {
+    event.preventDefault();
+    setError("");
+    await runBusy("auth-submit", async () => {
+      if (mode === "login") {
+        const result = await request("/auth/login", { method: "POST", body: JSON.stringify({ account: form.account, password: form.password }) });
+        setToken(result.access_token);
+      }
+      if (mode === "register") {
+        const payload = form.account.includes("@") ? { email: form.account } : { phone: form.account };
+        const result = await request("/auth/register", { method: "POST", body: JSON.stringify({ ...payload, nickname: form.nickname, password: form.password, code: form.code }) });
+        setToken(result.access_token);
+      }
+      if (mode === "reset") {
+        await request("/auth/reset-password", { method: "POST", body: JSON.stringify({ account: form.account, code: form.code, new_password: form.new_password }) });
+        setMode("login");
+        notify("密码已重置");
+        return;
+      }
+      await onAuthed();
+      notify(mode === "register" ? "注册成功" : "登录成功");
+      close();
+    }).catch((err) => setError(err.message));
+  }
+
+  return (
+    <Modal title={mode === "login" ? "登录" : mode === "register" ? "注册" : "忘记密码"} close={close}>
+      <div className="auth-tabs"><button className={mode === "login" ? "active" : ""} onClick={() => setMode("login")}>登录</button><button className={mode === "register" ? "active" : ""} onClick={() => setMode("register")}>注册</button><button className={mode === "reset" ? "active" : ""} onClick={() => setMode("reset")}>忘记密码</button></div>
+      <form className="form" onSubmit={submit}>
+        <input placeholder="邮箱或手机号" value={form.account} onChange={(event) => setForm({ ...form, account: event.target.value })} />
+        {mode === "register" && <input placeholder="昵称" value={form.nickname} onChange={(event) => setForm({ ...form, nickname: event.target.value })} />}
+        {mode !== "reset" && <input type="password" placeholder="密码，至少 8 位" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} />}
+        {mode !== "login" && <div className="code-row"><input placeholder="验证码" value={form.code} onChange={(event) => setForm({ ...form, code: event.target.value })} /><button type="button" className="btn" disabled={codeSending} aria-busy={codeSending} onClick={() => sendCode(mode === "register" ? "register" : "reset")}>{loadingText(codeSending, "发送验证码", "发送中...")}</button></div>}
+        {mode === "reset" && <input type="password" placeholder="新密码" value={form.new_password} onChange={(event) => setForm({ ...form, new_password: event.target.value })} />}
+        {mode === "register" && <p className="muted">仅支持密码登录，请牢记密码。</p>}
+        {error && <Notice type="error" message={error} />}
+        <button className="btn primary" disabled={authSubmitting} aria-busy={authSubmitting}>{loadingText(authSubmitting, mode === "login" ? "登录" : mode === "register" ? "注册" : "重置密码", mode === "login" ? "登录中..." : mode === "register" ? "注册中..." : "处理中...")}</button>
+      </form>
+    </Modal>
+  );
+}
+
+function Comment({ item }) {
+  return <article className="comment"><b>{item.user_nickname || item.user}</b><span>{formatDate(item.created_at)} {item.is_confirmed ? "已确认" : "未确认"}</span><p>{item.content}</p>{item.admin_reply && <blockquote>管理员回复：{item.admin_reply}</blockquote>}</article>;
+}
+
+function Gate({ openAuth }) {
+  return <section className="panel"><div className="empty">需要登录后查看。<button className="btn primary" onClick={openAuth}>立即登录</button></div></section>;
+}
+
+function Modal({ title, close, children, wide = false }) {
+  const modalRef = useRef(null);
+  const handleKeyDown = useOverlayFocus(modalRef, close);
+  return (
+    <div className="modal-backdrop">
+      <div
+        className={`modal ${wide ? "wide" : ""}`}
+        ref={modalRef}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        onKeyDown={handleKeyDown}
+      >
+        <div className="modal-head"><h2>{title}</h2><button onClick={close}>关闭</button></div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function Notice({ message, type = "info" }) {
+  return <div className={`notice ${type}`}>{message}</div>;
+}
+
+function formatDate(value) {
+  if (!value) return "-";
+  return new Date(value).toLocaleDateString("zh-CN");
+}

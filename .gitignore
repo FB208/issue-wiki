@@ -150,6 +150,7 @@ activemq-data/
 # Environments
 .env
 .envrc
+.env.secrets
 .venv
 env/
 venv/
@@ -216,3 +217,13 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Node / frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+
+# Local runtime
+.env.*.local
+*.local
+.vscode/.runtime.env

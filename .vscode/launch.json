@@ -1,0 +1,107 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Backend: FastAPI",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/run_backend.py",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/backend",
+        "PYTHONUTF8": "1",
+        "PYTHONIOENCODING": "utf-8"
+      },
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "preLaunchTask": "backend: install dependencies",
+      "presentation": {
+        "group": "issue-wiki",
+        "order": 1
+      }
+    },
+    {
+      "name": "Frontend: Vite",
+      "type": "node",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/run_frontend.mjs",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "internalConsoleOptions": "neverOpen",
+      "outputCapture": "std",
+      "env": {
+        "NO_COLOR": "1",
+        "FORCE_COLOR": "0"
+      },
+      "preLaunchTask": "frontend: install dependencies",
+      "serverReadyAction": {
+        "pattern": "(http://127\\.0\\.0\\.1:[0-9]+/?)",
+        "uriFormat": "%s",
+        "action": "debugWithEdge",
+        "webRoot": "${workspaceFolder}/frontend/src"
+      },
+      "presentation": {
+        "group": "issue-wiki",
+        "order": 2
+      }
+    },
+    {
+      "name": "Backend: FastAPI only",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/run_backend.py",
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/backend",
+        "PYTHONUTF8": "1",
+        "PYTHONIOENCODING": "utf-8"
+      },
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "preLaunchTask": "backend: install dependencies",
+      "presentation": {
+        "group": "single",
+        "order": 1
+      }
+    },
+    {
+      "name": "Browser: Edge",
+      "type": "msedge",
+      "request": "launch",
+      "url": "http://127.0.0.1:5173",
+      "webRoot": "${workspaceFolder}/frontend/src",
+      "sourceMaps": true,
+      "presentation": {
+        "group": "single",
+        "order": 2
+      }
+    },
+    {
+      "name": "Browser: Chrome",
+      "type": "chrome",
+      "request": "launch",
+      "url": "http://127.0.0.1:5173",
+      "webRoot": "${workspaceFolder}/frontend/src",
+      "sourceMaps": true,
+      "presentation": {
+        "group": "single",
+        "order": 3
+      }
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Debug: 全栈一键启动",
+      "configurations": [
+        "Backend: FastAPI",
+        "Frontend: Vite"
+      ],
+      "preLaunchTask": "dev: prepare ports",
+      "stopAll": true,
+      "presentation": {
+        "group": "issue-wiki",
+        "order": 0
+      }
+    }
+  ]
+}

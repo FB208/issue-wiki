@@ -1,0 +1,14 @@
+services:
+  app:
+    image: ${REGISTRY_REPO:-issue-wiki}:${VERSION:-latest}
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "33089:8000"
+    networks:
+      - mynet
+networks:
+  mynet:
+    driver: bridge
+    name: mynet
