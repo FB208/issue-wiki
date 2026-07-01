@@ -42,6 +42,7 @@ class PaymentStatus(str, Enum):
 
 class PaymentChannel(str, Enum):
     afdian = "afdian"
+    xorpay = "xorpay"
 
 
 class LikeTarget(str, Enum):
@@ -140,6 +141,10 @@ class SponsorOrder(Base):
     afdian_user_private_id: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
     afdian_plan_id: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
     afdian_remark: Mapped[str | None] = mapped_column(Text, nullable=True)
+    xorpay_aoid: Mapped[str | None] = mapped_column(String(120), unique=True, nullable=True, index=True)
+    xorpay_qr: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    xorpay_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    xorpay_pay_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     amount: Mapped[float] = mapped_column(Numeric(12, 2))
     channel: Mapped[str] = mapped_column(String(32), default=PaymentChannel.afdian.value)
     status: Mapped[str] = mapped_column(String(32), default=PaymentStatus.pending.value, index=True)

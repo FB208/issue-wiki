@@ -360,7 +360,7 @@ function HomePage({ user, openAuth }) {
       </section>
 
       {demandOpen && <DemandModal user={user} openAuth={openAuth} close={() => setDemandOpen(false)} onDone={loadTasks} />}
-      {sponsorTask && <SponsorModal task={sponsorTask} close={() => setSponsorTask(null)} />}
+      {sponsorTask && <SponsorModal task={sponsorTask} close={() => setSponsorTask(null)} onDone={loadTasks} />}
       {commentTask && <CommentsModal task={commentTask} user={user} openAuth={openAuth} close={() => setCommentTask(null)} onDone={loadTasks} />}
     </>
   );
@@ -452,20 +452,77 @@ function DemandModal({ user, openAuth, close, onDone }) {
   );
 }
 
-function SponsorModal({ task, close }) {
+function SponsorModal({ task, close, onDone }) {
+  const [paymentConfig, setPaymentConfig] = useState(null);
+  const [amount, setAmount] = useState("");
+  const [intent, setIntent] = useState(null);
+  const [polling, setPolling] = useState(false);
   const [error, setError] = useState("");
   const notify = useToast();
   const { busy, runBusy } = useBusyActions();
-  const opening = busy("open-afdian-sponsor");
+  const creating = busy("create-sponsor-order");
   const featureId = `IW-TASK-${task.id}`;
+  const channel = paymentConfig?.channel;
+  const isAfdian = channel === "afdian";
+  const isXorpay = channel === "xorpay";
+
+  useEffect(() => {
+    let active = true;
+    request("/payments/config").then((result) => {
+      if (!active) return;
+      setPaymentConfig(result);
+      if (result.channel === "xorpay") setAmount((current) => current || String(result.xorpay_min_order_amount || "1.00"));
+    }).catch((err) => {
+      if (active) setError(err.message);
+    });
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    if (intent?.channel !== "xorpay" || !intent.merchant_order_no || ["paid", "failed", "closed"].includes(intent.status)) return undefined;
+    let stopped = false;
+    async function pollOrder() {
+      setPolling(true);
+      try {
+        const order = await request(`/payments/orders/${encodeURIComponent(intent.merchant_order_no)}`);
+        if (stopped) return;
+        if (order.status === "paid") {
+          setIntent((current) => ({ ...current, status: "paid" }));
+          notify("支付成功，已更新赞助金额");
+          await onDone?.();
+        } else if (order.status === "failed" || order.status === "closed") {
+          setIntent((current) => ({ ...current, status: order.status }));
+          setError("订单未完成，请重新生成支付二维码");
+        }
+      } catch (err) {
+        if (!stopped) setError(err.message);
+      } finally {
+        if (!stopped) setPolling(false);
+      }
+    }
+    const firstTimer = window.setTimeout(pollOrder, 1500);
+    const timer = window.setInterval(pollOrder, 3000);
+    return () => {
+      stopped = true;
+      window.clearTimeout(firstTimer);
+      window.clearInterval(timer);
+    };
+  }, [intent?.channel, intent?.merchant_order_no, intent?.status]);
 
   async function submit(event) {
     event.preventDefault();
     setError("");
-    await runBusy("open-afdian-sponsor", async () => {
-      const result = await request(`/tasks/${task.id}/sponsor`, { method: "POST" });
-      if (!result.payment_url) throw new Error("爱发电赞助链接未配置");
-      window.location.href = result.payment_url;
+    await runBusy("create-sponsor-order", async () => {
+      if (!paymentConfig) throw new Error("支付配置加载中");
+      if (isAfdian) {
+        const result = await request(`/tasks/${task.id}/sponsor`, { method: "POST" });
+        if (!result.payment_url) throw new Error("爱发电赞助链接未配置");
+        window.location.href = result.payment_url;
+        return;
+      }
+      const result = await request(`/tasks/${task.id}/sponsor`, { method: "POST", body: JSON.stringify({ amount }) });
+      setIntent(result);
+      notify("订单已创建，请使用微信扫码支付");
     }).catch((err) => setError(err.message));
   }
 
@@ -493,14 +550,41 @@ function SponsorModal({ task, close }) {
   return (
     <Modal title={`赞助：${task.name}`} close={close}>
       <form className="form" onSubmit={submit}>
-        <p className="sponsor-warning">赞助某功能需要在支付时备注功能ID，参考下图：</p>
-        <img className="sponsor-example-image" src="/afdian-remark-example.png" alt="爱发电备注功能ID示例" />
-        <div className="feature-id-box">
-          <span>{featureId}</span>
-          <button type="button" className="btn" onClick={copyFeatureId}>复制 ID</button>
-        </div>
+        {!paymentConfig && !error && <div className="empty">加载支付配置...</div>}
+        {isAfdian && (
+          <>
+            <p className="sponsor-warning">赞助某功能需要在支付时备注功能ID，参考下图：</p>
+            <img className="sponsor-example-image" src="/afdian-remark-example.png" alt="爱发电备注功能ID示例" />
+            <div className="feature-id-box">
+              <span>{featureId}</span>
+              <button type="button" className="btn" onClick={copyFeatureId}>复制 ID</button>
+            </div>
+          </>
+        )}
+        {isXorpay && (
+          <>
+            <label>赞助金额
+              <input type="number" min={paymentConfig.xorpay_min_order_amount} step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} />
+            </label>
+            <p className="muted">当前最小订单金额：¥{paymentConfig.xorpay_min_order_amount}。提交后会生成微信扫码支付二维码。</p>
+            {intent?.qr_image_url && (
+              <div className="sponsor-payment-card">
+                <img className="sponsor-qr" src={intent.qr_image_url} alt="微信支付二维码" />
+                <div className="sponsor-order-meta">
+                  <b>{intent.status === "paid" ? "支付成功" : "等待支付"}</b>
+                  <span>订单号：{intent.merchant_order_no}</span>
+                  <span>金额：¥{intent.amount}</span>
+                  {intent.expires_in ? <span>二维码有效期约 {Math.ceil(intent.expires_in / 60)} 分钟</span> : null}
+                  {polling && intent.status !== "paid" ? <span>正在等待支付结果...</span> : null}
+                </div>
+              </div>
+            )}
+          </>
+        )}
         {error && <Notice type="error" message={error} />}
-        <button className="btn primary" disabled={opening} aria-busy={opening}>{loadingText(opening, "前往爱发电赞助", "打开中...")}</button>
+        <button className="btn primary" disabled={creating || !paymentConfig || (isXorpay && !amount)} aria-busy={creating}>
+          {loadingText(creating, isAfdian ? "前往爱发电赞助" : "生成微信支付二维码", isAfdian ? "打开中..." : "创建中...")}
+        </button>
       </form>
     </Modal>
   );
@@ -1160,7 +1244,10 @@ function CommentAdminList({ comments, action, busy }) {
 
 function OrderList({ orders }) {
   if (!orders.length) return <div className="empty">暂无订单</div>;
-  return <div className="admin-list">{orders.map((order) => <div key={order.id} className="admin-row"><b>{order.merchant_order_no}</b><span>{order.task_id ? `任务 #${order.task_id}` : "赞助作者"}</span><span>{order.channel}</span><span>¥{order.amount}</span><span>{order.status}</span><span>{formatDate(order.created_at)}</span></div>)}</div>;
+  return <div className="admin-list">{orders.map((order) => {
+    const providerOrderNo = order.xorpay_aoid || order.afdian_order_no || "-";
+    return <div key={order.id} className="admin-row"><b>{order.merchant_order_no}</b><span>{order.task_id ? `任务 #${order.task_id}` : "赞助作者"}</span><span>{order.channel}</span><span>{providerOrderNo}</span><span>¥{order.amount}</span><span>{order.status}</span><span>{formatDate(order.created_at)}</span></div>;
+  })}</div>;
 }
 
 function Pagination({ pageData, onChange, loading = false }) {

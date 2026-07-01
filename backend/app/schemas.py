@@ -141,10 +141,28 @@ class TaskCommentOut(OrmModel):
     updated_at: datetime
 
 
+class PaymentConfigOut(BaseModel):
+    channel: str
+    xorpay_min_order_amount: Decimal
+
+
+class SponsorCreate(BaseModel):
+    amount: Decimal | None = Field(default=None, gt=0)
+
+
 class SponsorIntentOut(BaseModel):
-    payment_url: str
-    feature_id: str
+    channel: str
+    payment_url: str | None = None
+    feature_id: str | None = None
     instructions: str
+    order_id: int | None = None
+    merchant_order_no: str | None = None
+    amount: Decimal | None = None
+    min_amount: Decimal | None = None
+    status: str | None = None
+    qr: str | None = None
+    qr_image_url: str | None = None
+    expires_in: int | None = None
 
 
 class SponsorOrderOut(OrmModel):
@@ -158,6 +176,10 @@ class SponsorOrderOut(OrmModel):
     afdian_user_private_id: str | None = None
     afdian_plan_id: str | None = None
     afdian_remark: str | None = None
+    xorpay_aoid: str | None = None
+    xorpay_qr: str | None = None
+    xorpay_detail: str | None = None
+    xorpay_pay_time: datetime | None = None
     amount: Decimal
     channel: str
     status: str

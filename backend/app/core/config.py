@@ -1,4 +1,5 @@
 from functools import lru_cache
+from decimal import Decimal
 from urllib.parse import urlparse
 
 from pydantic import Field
@@ -30,11 +31,20 @@ class Settings(BaseSettings):
     admin_password: str = "admin123456"
     admin_nickname: str = "生产力Mark"
 
+    payment_channel: str = "afdian"
+
     afdian_sponsor_url: str = ""
     afdian_webhook_secret: str = ""
     afdian_user_id: str = ""
     afdian_api_token: str = ""
     afdian_api_base_url: str = "https://afdian.net/api/open"
+
+    xorpay_aid: str = ""
+    xorpay_app_secret: str = ""
+    xorpay_notify_url: str = ""
+    xorpay_min_order_amount: Decimal = Decimal("1.00")
+    xorpay_api_base_url: str = "https://xorpay.com"
+    xorpay_order_expire_seconds: int = 7200
 
     gmail_smtp_host: str = "smtp.gmail.com"
     gmail_smtp_port: int = 587

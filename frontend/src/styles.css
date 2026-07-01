@@ -180,6 +180,42 @@ button:disabled { cursor: not-allowed; opacity: .62; }
   overflow-wrap: anywhere;
 }
 
+.sponsor-payment-card {
+  display: grid;
+  grid-template-columns: 180px 1fr;
+  gap: 16px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: var(--control-radius);
+  padding: 14px;
+  background: #fff;
+}
+
+.sponsor-qr {
+  width: 180px;
+  height: 180px;
+  object-fit: contain;
+  border: 1px solid var(--line);
+  background: #fff;
+}
+
+.sponsor-order-meta {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.sponsor-order-meta b {
+  color: var(--ink);
+  font-size: 16px;
+}
+
+.sponsor-order-meta span {
+  overflow-wrap: anywhere;
+}
+
 .btn, .link-btn {
   min-height: var(--control-height);
   display: inline-flex;
@@ -1164,6 +1200,8 @@ td small {
   }
   .filters, .status-filter, .inline-form, .code-row { display: grid; grid-template-columns: 1fr; width: 100%; }
   .filters input, .filters select, .inline-form input, .inline-form select { width: 100%; }
+  .sponsor-payment-card { grid-template-columns: 1fr; justify-items: center; }
+  .sponsor-order-meta { width: 100%; }
   .admin-task-filters { padding: 0 16px 16px; }
   .admin-task-filter-row input,
   .admin-task-filter-row input[type="number"],

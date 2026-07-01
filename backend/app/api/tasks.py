@@ -6,10 +6,21 @@ from sqlalchemy.orm import Session
 
 from app.api.utils import next_sort_order, page_payload, paginate_query, serialize_task, serialize_task_with_metrics, task_metrics_query
 from app.dependencies import get_current_user, get_current_user_optional, get_db
-from app.models import SponsorOrder, Task, TaskComment, TaskSource, TaskStatus, User
-from app.schemas import CommentCreate, Page, SponsorIntentOut, SponsorOrderOut, TaskCommentOut, TaskDemandCreate, TaskOut
+from app.models import PaymentChannel, SponsorOrder, Task, TaskComment, TaskSource, TaskStatus, User
+from app.schemas import CommentCreate, Page, SponsorCreate, SponsorIntentOut, SponsorOrderOut, TaskCommentOut, TaskDemandCreate, TaskOut
 from app.services.github_sync import sync_comment_to_github_background
-from app.services.payment import build_afdian_sponsor_url, build_task_feature_id, sponsor_instructions
+from app.services.payment import (
+    PaymentConfigError,
+    PaymentProviderError,
+    PaymentValidationError,
+    active_payment_channel,
+    build_afdian_sponsor_url,
+    build_task_feature_id,
+    build_xorpay_qr_image_url,
+    create_xorpay_sponsor_order,
+    sponsor_instructions,
+    xorpay_min_order_amount,
+)
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
@@ -155,6 +166,7 @@ def create_task_comment(
 @router.post("/{task_id}/sponsor", response_model=SponsorIntentOut)
 def create_sponsor_order(
     task_id: int,
+    payload: SponsorCreate | None = None,
     user: User | None = Depends(get_current_user_optional),
     db: Session = Depends(get_db),
 ) -> SponsorIntentOut:
@@ -164,12 +176,39 @@ def create_sponsor_order(
     if not task or task.is_hidden:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="任务不存在")
 
-    payment_url = build_afdian_sponsor_url()
-    if not payment_url:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="爱发电赞助链接未配置")
-    feature_id = build_task_feature_id(task.id)
+    try:
+        channel = active_payment_channel()
+    except PaymentConfigError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    if channel == PaymentChannel.afdian.value:
+        payment_url = build_afdian_sponsor_url()
+        if not payment_url:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="爱发电赞助链接未配置")
+        feature_id = build_task_feature_id(task.id)
+        return SponsorIntentOut(
+            channel=PaymentChannel.afdian.value,
+            payment_url=payment_url,
+            feature_id=feature_id,
+            instructions=sponsor_instructions(feature_id),
+        )
+
+    try:
+        order, result = create_xorpay_sponsor_order(db, task, user, payload.amount if payload else None)
+    except (PaymentConfigError, PaymentValidationError) as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except PaymentProviderError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
     return SponsorIntentOut(
-        payment_url=payment_url,
-        feature_id=feature_id,
-        instructions=sponsor_instructions(feature_id),
+        channel=PaymentChannel.xorpay.value,
+        instructions="请使用微信扫描二维码完成赞助，支付成功后系统会自动更新赞助金额。",
+        order_id=order.id,
+        merchant_order_no=order.merchant_order_no,
+        amount=order.amount,
+        min_amount=xorpay_min_order_amount(),
+        status=order.status,
+        qr=order.xorpay_qr,
+        qr_image_url=build_xorpay_qr_image_url(order.xorpay_qr),
+        expires_in=int(result.get("expires_in") or result.get("expire_in") or 0) or None,
     )

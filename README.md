@@ -72,17 +72,35 @@ GITHUB_API_BASE_URL=https://api.github.com
 - 赞助金额、启动资金、排序、隐藏状态和订单数据不会写入 GitHub。
 - GitHub issue 新评论、编辑评论、删除评论会通过 webhook 同步到本地任务评论。
 
-## 爱发电赞助配置
+## 支付渠道配置
 
 `.env` 中配置：
 
 ```bash
+# 当前启用支付渠道：xorpay 或 afdian
+PAYMENT_CHANNEL=xorpay
+
+# XorPay 微信扫码支付
+XORPAY_AID=replace-with-xorpay-aid
+XORPAY_APP_SECRET=replace-with-xorpay-app-secret
+XORPAY_NOTIFY_URL=https://你的域名/api/payments/xorpay/notify
+XORPAY_MIN_ORDER_AMOUNT=1.00
+XORPAY_API_BASE_URL=https://xorpay.com
+XORPAY_ORDER_EXPIRE_SECONDS=7200
+
+# 爱发电赞助，PAYMENT_CHANNEL=afdian 时启用
 AFDIAN_SPONSOR_URL=https://afdian.com/a/your-name
 AFDIAN_WEBHOOK_SECRET=replace-with-random-secret
 AFDIAN_USER_ID=
 AFDIAN_API_TOKEN=
 AFDIAN_API_BASE_URL=https://afdian.net/api/open
 ```
+
+XorPay 使用微信 NATIVE 扫码支付：
+
+- `XORPAY_AID` 和 `XORPAY_APP_SECRET` 在 XorPay 后台配置页获取。
+- `XORPAY_NOTIFY_URL` 必须是公网可访问地址；本地开发调试需要内网穿透。
+- 支付成功以后，以 XorPay 回调并经二次查询确认后的本地订单状态为准。
 
 在爱发电开发者后台配置 webhook：
 
