@@ -35,7 +35,7 @@ const githubSyncOptions = [
   { value: "error", label: "同步失败" },
 ];
 
-const defaultStatuses = statusOptions.map((item) => item.value);
+const defaultStatuses = ["pending_start", "in_progress"];
 const defaultPageParams = { page: 1, page_size: 20 };
 const pageSizeOptions = [10, 20, 50];
 
@@ -49,6 +49,21 @@ function createDefaultAdminTaskFilters() {
     github_issue_number: "",
     created_from: "",
     created_to: "",
+  };
+}
+
+function createDefaultTaskForm() {
+  return { name: "", description: "", start_amount: "0", sort_order: "", status: "pending_start", is_hidden: false };
+}
+
+function taskFormPayload(form) {
+  return {
+    name: form.name,
+    description: form.description,
+    start_amount: form.start_amount,
+    sort_order: form.sort_order === "" ? undefined : Number(form.sort_order),
+    status: form.status,
+    is_hidden: form.is_hidden,
   };
 }
 
@@ -176,6 +191,7 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [nav, setNav] = useState({ folders: [], documents: [] });
   const [authOpen, setAuthOpen] = useState(false);
+  const [authorTipOpen, setAuthorTipOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
 
   async function loadUser() {
@@ -207,9 +223,10 @@ export default function App() {
 
   return (
     <ToastProvider>
-      <Layout nav={nav} user={user} logout={logout} openAuth={() => setAuthOpen(true)} mobileOpen={mobileOpen} setMobileOpen={setMobileOpen}>
+      <Layout nav={nav} user={user} logout={logout} openAuth={() => setAuthOpen(true)} openAuthorTip={() => setAuthorTipOpen(true)} mobileOpen={mobileOpen} setMobileOpen={setMobileOpen}>
         <Routes>
           <Route path="/" element={<HomePage user={user} openAuth={() => setAuthOpen(true)} />} />
+          <Route path="/tasks/:taskId" element={<TaskDetailPage user={user} openAuth={() => setAuthOpen(true)} />} />
           <Route path="/docs" element={<DocumentsPage nav={nav} user={user} openAuth={() => setAuthOpen(true)} />} />
           <Route path="/docs/:documentId" element={<DocumentsPage nav={nav} user={user} openAuth={() => setAuthOpen(true)} />} />
           <Route path="/mine/tasks" element={<MinePage type="tasks" user={user} openAuth={() => setAuthOpen(true)} />} />
@@ -218,11 +235,12 @@ export default function App() {
         </Routes>
       </Layout>
       {authOpen && <AuthModal close={() => setAuthOpen(false)} onAuthed={loadUser} />}
+      {authorTipOpen && <SponsorModal close={() => setAuthorTipOpen(false)} />}
     </ToastProvider>
   );
 }
 
-function Layout({ children, nav, user, logout, openAuth, mobileOpen, setMobileOpen }) {
+function Layout({ children, nav, user, logout, openAuth, openAuthorTip, mobileOpen, setMobileOpen }) {
   return (
     <div className="shell">
       <button className="mobile-menu" onClick={() => setMobileOpen(true)}>菜单</button>
@@ -252,7 +270,7 @@ function Layout({ children, nav, user, logout, openAuth, mobileOpen, setMobileOp
           <div className="top-actions">
             {user ? <span className="user-chip">{user.nickname}</span> : <button className="btn" onClick={openAuth}>登录</button>}
             {user ? <button className="btn ghost" onClick={logout}>退出</button> : null}
-            <Link className="btn primary" to="/">赞助功能</Link>
+            <button className="btn primary" onClick={openAuthorTip}>打赏作者</button>
           </div>
         </header>
         {children}
@@ -270,7 +288,6 @@ function HomePage({ user, openAuth }) {
   const [error, setError] = useState("");
   const [demandOpen, setDemandOpen] = useState(false);
   const [sponsorTask, setSponsorTask] = useState(null);
-  const [commentTask, setCommentTask] = useState(null);
   const deferredName = useDeferredValue(filters.name);
 
   async function loadTasks() {
@@ -323,7 +340,7 @@ function HomePage({ user, openAuth }) {
 
       <section className="panel">
         <div className="panel-head stacked">
-          <div><h2>任务列表</h2><p>默认展示所有公开任务，前三名展示金银铜效果。</p></div>
+          <div><h2>任务列表</h2><p>默认展示待启动和进行中的任务，前三名展示金银铜效果。</p></div>
           <div className="filters">
             <input value={filters.name} placeholder="任务名称模糊查询" onChange={(event) => updateFilter({ name: event.target.value })} />
             <select value={filters.sort_by} onChange={(event) => updateFilter({ sort_by: event.target.value })}>
@@ -355,13 +372,12 @@ function HomePage({ user, openAuth }) {
           <button className="btn primary" onClick={() => (user ? setDemandOpen(true) : openAuth())}>提需求</button>
         </div>
         {error && <Notice type="error" message={error} />}
-        {loading ? <div className="empty">加载中...</div> : <TaskTable tasks={tasks} startIndex={(tasksPage.page - 1) * tasksPage.page_size} onSponsor={setSponsorTask} onComment={setCommentTask} />}
+        {loading ? <div className="empty">加载中...</div> : <TaskTable tasks={tasks} startIndex={(tasksPage.page - 1) * tasksPage.page_size} onSponsor={setSponsorTask} />}
         <Pagination pageData={tasksPage} loading={loading} onChange={(next) => setPagination((current) => ({ ...current, ...next }))} />
       </section>
 
       {demandOpen && <DemandModal user={user} openAuth={openAuth} close={() => setDemandOpen(false)} onDone={loadTasks} />}
       {sponsorTask && <SponsorModal task={sponsorTask} close={() => setSponsorTask(null)} onDone={loadTasks} />}
-      {commentTask && <CommentsModal task={commentTask} user={user} openAuth={openAuth} close={() => setCommentTask(null)} onDone={loadTasks} />}
     </>
   );
 }
@@ -370,7 +386,7 @@ function Metric({ title, value }) {
   return <div className="metric"><span>{title}</span><b>{value}</b></div>;
 }
 
-function TaskTable({ tasks, onSponsor, onComment, startIndex = 0 }) {
+function TaskTable({ tasks, onSponsor, startIndex = 0 }) {
   if (!tasks.length) return <div className="empty">暂无任务</div>;
   return (
     <>
@@ -378,40 +394,39 @@ function TaskTable({ tasks, onSponsor, onComment, startIndex = 0 }) {
         <table>
           <thead><tr><th>顺序</th><th>标题</th><th>创建日期</th><th>启动资金</th><th>已赞助</th><th>共创人数</th><th>状态</th><th>操作</th></tr></thead>
           <tbody>
-            {tasks.map((task, index) => <TaskRow key={task.id} task={task} index={startIndex + index} onSponsor={onSponsor} onComment={onComment} />)}
+            {tasks.map((task, index) => <TaskRow key={task.id} task={task} index={startIndex + index} onSponsor={onSponsor} />)}
           </tbody>
         </table>
       </div>
       <div className="mobile-cards">
-        {tasks.map((task, index) => <TaskCard key={task.id} task={task} index={startIndex + index} onSponsor={onSponsor} onComment={onComment} />)}
+        {tasks.map((task, index) => <TaskCard key={task.id} task={task} index={startIndex + index} onSponsor={onSponsor} />)}
       </div>
     </>
   );
 }
 
-function TaskRow({ task, index, onSponsor, onComment }) {
+function TaskRow({ task, index, onSponsor }) {
   return (
     <tr>
       <td><Rank index={index} value={task.sort_order} /></td>
-      <td><b>{task.name}</b><small>{task.description.slice(0, 72)}...</small></td>
+      <td><Link className="task-title-link" to={`/tasks/${task.id}`}><b>{task.name}</b></Link></td>
       <td>{formatDate(task.created_at)}</td>
       <td>¥{task.start_amount}</td>
       <td>¥{task.donated_amount}</td>
       <td>{task.co_creator_count}</td>
       <td><span className="status">{task.status_label}</span></td>
-      <td><button className="link-btn" onClick={() => onComment(task)}>共创</button><button className="link-btn" onClick={() => onSponsor(task)}>赞助</button></td>
+      <td><Link className="link-btn" to={`/tasks/${task.id}`}>共创</Link><button className="link-btn" onClick={() => onSponsor(task)}>赞助</button></td>
     </tr>
   );
 }
 
-function TaskCard({ task, index, onSponsor, onComment }) {
+function TaskCard({ task, index, onSponsor }) {
   return (
     <article className="task-card">
       <div className="task-card-head"><Rank index={index} value={task.sort_order} /><span className="status">{task.status_label}</span></div>
-      <h3>{task.name}</h3>
-      <p>{task.description.slice(0, 120)}...</p>
+      <h3><Link className="task-title-link" to={`/tasks/${task.id}`}>{task.name}</Link></h3>
       <div className="card-stats"><span>启动 ¥{task.start_amount}</span><span>已赞助 ¥{task.donated_amount}</span><span>共创 {task.co_creator_count}</span></div>
-      <div className="row-actions"><button className="btn" onClick={() => onComment(task)}>共创</button><button className="btn primary" onClick={() => onSponsor(task)}>赞助</button></div>
+      <div className="row-actions"><Link className="btn" to={`/tasks/${task.id}`}>共创</Link><button className="btn primary" onClick={() => onSponsor(task)}>赞助</button></div>
     </article>
   );
 }
@@ -461,10 +476,14 @@ function SponsorModal({ task, close, onDone }) {
   const notify = useToast();
   const { busy, runBusy } = useBusyActions();
   const creating = busy("create-sponsor-order");
-  const featureId = `IW-TASK-${task.id}`;
+  const isTaskSponsor = Boolean(task);
+  const featureId = isTaskSponsor ? `IW-TASK-${task.id}` : "";
+  const sponsorTitle = isTaskSponsor ? `赞助：${task.name}` : "打赏作者";
+  const sponsorEndpoint = isTaskSponsor ? `/tasks/${task.id}/sponsor` : "/payments/tip";
   const channel = paymentConfig?.channel;
   const isAfdian = channel === "afdian";
   const isXorpay = channel === "xorpay";
+  const afdianActionText = isTaskSponsor ? "前往爱发电赞助" : "前往爱发电打赏";
 
   useEffect(() => {
     let active = true;
@@ -488,7 +507,7 @@ function SponsorModal({ task, close, onDone }) {
         if (stopped) return;
         if (order.status === "paid") {
           setIntent((current) => ({ ...current, status: "paid" }));
-          notify("支付成功，已更新赞助金额");
+          notify(isTaskSponsor ? "支付成功，已更新赞助金额" : "支付成功，感谢打赏");
           await onDone?.();
         } else if (order.status === "failed" || order.status === "closed") {
           setIntent((current) => ({ ...current, status: order.status }));
@@ -515,12 +534,12 @@ function SponsorModal({ task, close, onDone }) {
     await runBusy("create-sponsor-order", async () => {
       if (!paymentConfig) throw new Error("支付配置加载中");
       if (isAfdian) {
-        const result = await request(`/tasks/${task.id}/sponsor`, { method: "POST" });
+        const result = await request(sponsorEndpoint, { method: "POST" });
         if (!result.payment_url) throw new Error("爱发电赞助链接未配置");
         window.location.href = result.payment_url;
         return;
       }
-      const result = await request(`/tasks/${task.id}/sponsor`, { method: "POST", body: JSON.stringify({ amount }) });
+      const result = await request(sponsorEndpoint, { method: "POST", body: JSON.stringify({ amount }) });
       setIntent(result);
       notify("订单已创建，请使用微信扫码支付");
     }).catch((err) => setError(err.message));
@@ -548,17 +567,21 @@ function SponsorModal({ task, close, onDone }) {
   }
 
   return (
-    <Modal title={`赞助：${task.name}`} close={close}>
+    <Modal title={sponsorTitle} close={close}>
       <form className="form" onSubmit={submit}>
         {!paymentConfig && !error && <div className="empty">加载支付配置...</div>}
         {isAfdian && (
           <>
-            <p className="sponsor-warning">赞助某功能需要在支付时备注功能ID，参考下图：</p>
-            <img className="sponsor-example-image" src="/afdian-remark-example.png" alt="爱发电备注功能ID示例" />
-            <div className="feature-id-box">
-              <span>{featureId}</span>
-              <button type="button" className="btn" onClick={copyFeatureId}>复制 ID</button>
-            </div>
+            {isTaskSponsor ? (
+              <>
+                <p className="sponsor-warning">赞助某功能需要在支付时备注功能ID，参考下图：</p>
+                <img className="sponsor-example-image" src="/afdian-remark-example.png" alt="爱发电备注功能ID示例" />
+                <div className="feature-id-box">
+                  <span>{featureId}</span>
+                  <button type="button" className="btn" onClick={copyFeatureId}>复制 ID</button>
+                </div>
+              </>
+            ) : <p className="sponsor-warning">点击后将前往爱发电打赏作者，无需填写功能 ID。</p>}
           </>
         )}
         {isXorpay && (
@@ -583,65 +606,139 @@ function SponsorModal({ task, close, onDone }) {
         )}
         {error && <Notice type="error" message={error} />}
         <button className="btn primary" disabled={creating || !paymentConfig || (isXorpay && !amount)} aria-busy={creating}>
-          {loadingText(creating, isAfdian ? "前往爱发电赞助" : "生成微信支付二维码", isAfdian ? "打开中..." : "创建中...")}
+          {loadingText(creating, isAfdian ? afdianActionText : "生成微信支付二维码", isAfdian ? "打开中..." : "创建中...")}
         </button>
       </form>
     </Modal>
   );
 }
 
-function CommentsModal({ task, user, openAuth, close, onDone }) {
+function TaskDetailPage({ user, openAuth }) {
+  const { taskId } = useParams();
+  const navigate = useNavigate();
+  const [task, setTask] = useState(null);
   const [commentsPage, setCommentsPage] = useState(() => emptyPage());
   const [pagination, setPagination] = useState(defaultPageParams);
-  const [commentsLoading, setCommentsLoading] = useState(true);
+  const [loading, setLoading] = useState(true);
+  const [replyDrawerOpen, setReplyDrawerOpen] = useState(false);
+  const [replyDrawerHeight, setReplyDrawerHeight] = useState(56);
   const [content, setContent] = useState("");
   const [error, setError] = useState("");
   const notify = useToast();
   const { busy, runBusy } = useBusyActions();
-  const submitting = busy("submit-task-comment");
+  const submitting = task ? busy(`submit-task-comment-${task.id}`) : false;
 
-  async function load() {
-    setCommentsLoading(true);
-    const query = toQuery(pagination);
+  useEffect(() => {
+    setTask(null);
+    setCommentsPage(emptyPage());
+    setError("");
+    setPagination(defaultPageParams);
+    setReplyDrawerOpen(false);
+    setContent("");
+  }, [taskId]);
+
+  async function loadTask() {
+    if (!taskId) return;
+    setLoading(true);
+    setError("");
     try {
-      setCommentsPage(await request(`/tasks/${task.id}/comments${query}`));
+      const [taskResult, comments] = await Promise.all([
+        request(`/tasks/${taskId}`),
+        request(`/tasks/${taskId}/comments${toQuery(pagination)}`),
+      ]);
+      setTask(taskResult);
+      setCommentsPage(comments);
     } catch (err) {
+      setTask(null);
+      setCommentsPage(emptyPage());
       setError(err.message);
     } finally {
-      setCommentsLoading(false);
+      setLoading(false);
     }
   }
 
-  useEffect(() => { load(); }, [task.id, pagination.page, pagination.page_size]);
+  useEffect(() => { loadTask(); }, [taskId, pagination.page, pagination.page_size]);
+
+  function goBack() {
+    if (window.history.length > 1) navigate(-1);
+    else navigate("/");
+  }
+
+  function openReplyDrawer() {
+    if (!user) return openAuth();
+    if (task?.status === "completed") return;
+    setError("");
+    setContent("");
+    setReplyDrawerOpen(true);
+  }
+
+  function closeReplyDrawer() {
+    setReplyDrawerOpen(false);
+    setContent("");
+  }
 
   async function submit(event) {
     event.preventDefault();
+    if (!task) return;
     if (!user) return openAuth();
+    const value = content.trim();
+    if (!value) return;
     setError("");
-    await runBusy("submit-task-comment", async () => {
-      await request(`/tasks/${task.id}/comments`, { method: "POST", body: JSON.stringify({ content }) });
-      setContent("");
-      await load();
-      await onDone();
+    await runBusy(`submit-task-comment-${task.id}`, async () => {
+      await request(`/tasks/${task.id}/comments`, { method: "POST", body: JSON.stringify({ content: value }) });
+      closeReplyDrawer();
+      await loadTask();
       notify("评论已发布，GitHub 后台同步中");
     }).catch((err) => setError(err.message));
   }
 
+  if (!task) {
+    return <section className="panel"><div className="empty">{loading ? "加载中..." : error || "任务不存在"}</div></section>;
+  }
+
+  const completed = task.status === "completed";
+
   return (
-    <Modal title={`共创：${task.name}`} close={close} wide>
-      <div className="comment-list">
-        {commentsLoading ? <div className="empty">加载中...</div> : pageItems(commentsPage).map((item) => <Comment key={item.id} item={item} />)}
-        {!commentsLoading && !commentsPage.items.length && <div className="empty">暂无共创评论</div>}
-      </div>
-      <Pagination pageData={commentsPage} loading={commentsLoading} onChange={(next) => setPagination((current) => ({ ...current, ...next }))} />
-      {task.status === "completed" ? <Notice message="已完成任务不能继续共创，但仍可赞助。" /> : (
-        <form className="form" onSubmit={submit}>
-          <MarkdownEditor value={content} onChange={setContent} user={user} openAuth={openAuth} />
+    <>
+      <div className="page-back-row"><button className="btn ghost" onClick={goBack}>返回</button></div>
+      {error && <Notice type="error" message={error} />}
+      <section className="doc-layout task-page-layout">
+        <article className="panel doc-panel">
+          <div className="doc-head">
+            <div><span className="label">任务</span><h2>{task.name}</h2><p>创建于 {formatDate(task.created_at)}，更新于 {formatDate(task.updated_at)}</p></div>
+            <div className="row-actions">
+              <span className="status">{task.status_label}</span>
+              {task.github_issue_url && <a className="btn" href={task.github_issue_url} target="_blank" rel="noreferrer">GitHub Issue</a>}
+              <button className="btn primary" disabled={completed} onClick={openReplyDrawer}>{completed ? "已完成" : "发起共创"}</button>
+            </div>
+          </div>
+          <div className="task-meta-grid">
+            <DetailItem label="启动资金" value={`¥${task.start_amount}`} />
+            <DetailItem label="已赞助" value={`¥${task.donated_amount}`} />
+            <DetailItem label="共创人数" value={task.co_creator_count} />
+            <DetailItem label="排序" value={task.sort_order} />
+          </div>
+          {completed && <Notice message="已完成任务不能继续共创，但仍可赞助。" />}
+          <div className="markdown-body task-page-body"><ReactMarkdown remarkPlugins={[remarkGfm]}>{task.description || "暂无描述"}</ReactMarkdown></div>
+        </article>
+        <section className="panel comments-panel document-comments-panel">
+          <div className="panel-head"><h2>共创评论</h2><button className="btn" disabled={completed} onClick={openReplyDrawer}>{completed ? "已完成" : "发起评论"}</button></div>
+          <div className="comment-list compact">
+            {loading ? <div className="empty">加载中...</div> : pageItems(commentsPage).map((item) => <Comment key={item.id} item={item} />)}
+            {!loading && !commentsPage.items.length && <div className="empty">暂无共创评论</div>}
+          </div>
+          <Pagination pageData={commentsPage} loading={loading} onChange={(next) => setPagination((current) => ({ ...current, ...next }))} />
+        </section>
+      </section>
+      <BottomDrawer title="发布共创评论" open={replyDrawerOpen} height={replyDrawerHeight} setHeight={setReplyDrawerHeight} close={closeReplyDrawer}>
+        <form className="form drawer-form" onSubmit={submit}>
+          <p className="muted">评论会显示在任务共创区；如果任务已绑定 GitHub issue，会后台同步到 GitHub。</p>
+          <MarkdownEditor value={content} onChange={setContent} user={user} openAuth={openAuth} compact fill />
           {error && <Notice type="error" message={error} />}
-          <button className="btn primary" disabled={submitting} aria-busy={submitting}>{loadingText(submitting, "发布共创评论", "发布中...")}</button>
+          <div className="drawer-actions"><button type="button" className="btn" onClick={closeReplyDrawer}>取消</button><button className="btn primary" disabled={submitting || !content.trim()} aria-busy={submitting}>{loadingText(submitting, "发布评论", "发布中...")}</button></div>
         </form>
-      )}
-    </Modal>
+      </BottomDrawer>
+    </>
   );
 }
 
@@ -799,7 +896,7 @@ function MinePage({ type, user, openAuth }) {
   return (
     <section className="panel">
       <div className="panel-head"><h2>{type === "tasks" ? "我的需求" : "我的赞助"}</h2></div>
-      {loading ? <div className="empty">加载中...</div> : type === "tasks" ? <TaskTable tasks={pageItems(itemsPage)} startIndex={(itemsPage.page - 1) * itemsPage.page_size} onSponsor={() => {}} onComment={() => {}} /> : <OrderList orders={pageItems(itemsPage)} />}
+      {loading ? <div className="empty">加载中...</div> : type === "tasks" ? <TaskTable tasks={pageItems(itemsPage)} startIndex={(itemsPage.page - 1) * itemsPage.page_size} onSponsor={() => {}} /> : <OrderList orders={pageItems(itemsPage)} />}
       <Pagination pageData={itemsPage} loading={loading} onChange={(next) => setPagination((current) => ({ ...current, ...next }))} />
     </section>
   );
@@ -824,7 +921,8 @@ function AdminPage({ user, openAuth, refreshNav }) {
   });
   const [adminTaskFilters, setAdminTaskFilters] = useState(createDefaultAdminTaskFilters);
   const [heroContent, setHeroContent] = useState("");
-  const [taskForm, setTaskForm] = useState({ name: "", description: "", start_amount: "0", status: "pending_start" });
+  const [taskForm, setTaskForm] = useState(createDefaultTaskForm);
+  const [editingTask, setEditingTask] = useState(null);
   const [taskDrawerOpen, setTaskDrawerOpen] = useState(false);
   const [taskDrawerHeight, setTaskDrawerHeight] = useState(72);
   const [taskDetail, setTaskDetail] = useState(null);
@@ -873,6 +971,42 @@ function AdminPage({ user, openAuth, refreshNav }) {
     setTaskDetail(task);
     setTaskDetailComments(emptyPage());
     setTaskDetailPaging(defaultPageParams);
+  }
+
+  function openCreateTaskDrawer() {
+    setEditingTask(null);
+    setTaskForm(createDefaultTaskForm());
+    setTaskDrawerOpen(true);
+  }
+
+  function openEditTaskDrawer(task) {
+    setEditingTask(task);
+    setTaskForm({
+      name: task.name || "",
+      description: task.description || "",
+      start_amount: String(task.start_amount ?? "0"),
+      sort_order: task.sort_order == null ? "" : String(task.sort_order),
+      status: task.status || "pending_start",
+      is_hidden: Boolean(task.is_hidden),
+    });
+    setTaskDrawerOpen(true);
+  }
+
+  function closeTaskDrawer() {
+    setTaskDrawerOpen(false);
+    setEditingTask(null);
+    setTaskForm(createDefaultTaskForm());
+  }
+
+  function replaceTaskLocally(updatedTask) {
+    setData((current) => ({
+      ...current,
+      tasks: {
+        ...current.tasks,
+        items: pageItems(current.tasks).map((item) => (item.id === updatedTask.id ? updatedTask : item)),
+      },
+    }));
+    setTaskDetail((current) => (current?.id === updatedTask.id ? updatedTask : current));
   }
 
   async function loadTaskDetail(taskId = taskDetail?.id) {
@@ -935,26 +1069,48 @@ function AdminPage({ user, openAuth, refreshNav }) {
   if (!user) return <Gate openAuth={openAuth} />;
   if (user.role !== "admin") return <section className="panel"><div className="empty">需要管理员权限</div></section>;
 
-  async function createTask(event) {
+  async function submitTask(event) {
     event.preventDefault();
     setError("");
-    await runBusy("admin-create-task", async () => {
-      await request("/admin/tasks", { method: "POST", body: JSON.stringify(taskForm) });
-      setTaskForm({ name: "", description: "", start_amount: "0", status: "pending_start" });
-      setTaskDrawerOpen(false);
-      await load();
-      notify("任务已创建");
+    const isEditing = Boolean(editingTask);
+    const busyKey = isEditing ? `admin-update-task-${editingTask.id}` : "admin-create-task";
+    await runBusy(busyKey, async () => {
+      const payload = taskFormPayload(taskForm);
+      if (isEditing) {
+        const queuesGithubSync = patchQueuesGithubSync(editingTask, payload);
+        const updatedTask = await request(`/admin/tasks/${editingTask.id}`, { method: "PUT", body: JSON.stringify(payload) });
+        replaceTaskLocally(updatedTask);
+        await load();
+        notify(queuesGithubSync ? "已保存，GitHub 后台同步中" : "已保存");
+      } else {
+        await request("/admin/tasks", { method: "POST", body: JSON.stringify(payload) });
+        await load();
+        notify("任务已创建");
+      }
+      closeTaskDrawer();
     }).catch((err) => setError(err.message));
   }
 
   async function updateTask(task, patch) {
     setError("");
     await runBusy(`admin-update-task-${task.id}`, async () => {
-      await request(`/admin/tasks/${task.id}`, { method: "PUT", body: JSON.stringify(patch) });
+      const queuesGithubSync = patchQueuesGithubSync(task, patch);
+      const updatedTask = await request(`/admin/tasks/${task.id}`, { method: "PUT", body: JSON.stringify(patch) });
+      replaceTaskLocally(updatedTask);
       await load();
       if (taskDetail?.id === task.id) await loadTaskDetail(task.id);
-      notify("已保存，GitHub 后台同步中");
+      notify(queuesGithubSync ? "已保存，GitHub 后台同步中" : "已保存");
     }).catch((err) => setError(err.message));
+  }
+
+  async function createTaskDetailComment(task, content) {
+    setError("");
+    await runBusy(`admin-task-detail-comment-${task.id}`, async () => {
+      await request(`/admin/tasks/${task.id}/comments`, { method: "POST", body: JSON.stringify({ content }) });
+      await loadTaskDetail(task.id);
+      await load();
+      notify("评论已发布，GitHub 后台同步中");
+    });
   }
 
   async function createFolder(event) {
@@ -1043,13 +1199,13 @@ function AdminPage({ user, openAuth, refreshNav }) {
         <div className="panel-head">
           <div><h2>任务管理</h2><p>非 GitHub 来源任务从待审核改为其他状态后，会自动同步到 GitHub issue。</p></div>
           <div className="row-actions">
-            <button className="btn primary" onClick={() => setTaskDrawerOpen(true)}>新增任务</button>
+            <button className="btn primary" onClick={openCreateTaskDrawer}>新增任务</button>
             <button className="btn" disabled={busy("admin-sync-github")} aria-busy={busy("admin-sync-github")} onClick={syncHistoricalIssues}>{loadingText(busy("admin-sync-github"), "同步历史任务", "同步中...")}</button>
           </div>
         </div>
         <AdminTaskFilters filters={adminTaskFilters} loading={adminLoading} updateFilters={updateAdminTaskFilters} resetFilters={resetAdminTaskFilters} />
         {githubSyncResult && <Notice message={`GitHub 历史同步：导入 ${githubSyncResult.imported}，评论 ${githubSyncResult.comments_imported}，跳过 ${githubSyncResult.skipped}，失败 ${githubSyncResult.failed}`} />}
-        {adminLoading ? <div className="empty">加载中...</div> : <TaskAdminList tasks={pageItems(data.tasks)} updateTask={updateTask} openDetail={openTaskDetail} busy={busy} />}
+        {adminLoading ? <div className="empty">加载中...</div> : <TaskAdminList tasks={pageItems(data.tasks)} updateTask={updateTask} openDetail={openTaskDetail} openEdit={openEditTaskDrawer} busy={busy} />}
         <Pagination pageData={data.tasks} loading={adminLoading} onChange={(next) => updateAdminPaging("tasks", next)} />
       </div>}
       {tab === "documents" && <div className="panel admin-panel">
@@ -1065,16 +1221,18 @@ function AdminPage({ user, openAuth, refreshNav }) {
       {tab === "users" && <div className="panel admin-panel"><div className="panel-head"><h2>用户管理</h2></div>{adminLoading ? <div className="empty">加载中...</div> : <div className="admin-list">{pageItems(data.users).map((item) => { const userBusy = busy(`admin-user-status-${item.id}`); return <div key={item.id} className="admin-row"><b>{item.nickname}</b><span>{item.email || item.phone}</span><span>{item.is_banned ? "已封禁" : "正常"}</span><button className="btn" disabled={userBusy} aria-busy={userBusy} onClick={() => updateUserStatus(item)}>{loadingText(userBusy, item.is_banned ? "解封" : "封禁", "处理中...")}</button></div>; })}</div>}<Pagination pageData={data.users} loading={adminLoading} onChange={(next) => updateAdminPaging("users", next)} /></div>}
       {tab === "comments" && <div className="panel admin-panel"><div className="panel-head"><h2>评论管理</h2></div>{adminLoading ? <div className="empty">加载中...</div> : <CommentAdminList comments={pageItems(data.comments)} action={commentAction} busy={busy} />}<Pagination pageData={data.comments} loading={adminLoading} onChange={(next) => updateAdminPaging("comments", next)} /></div>}
       {tab === "orders" && <div className="panel admin-panel"><div className="panel-head"><h2>订单管理</h2></div>{adminLoading ? <div className="empty">加载中...</div> : <OrderList orders={pageItems(data.orders)} />}<Pagination pageData={data.orders} loading={adminLoading} onChange={(next) => updateAdminPaging("orders", next)} /></div>}
-      {taskDetail && <TaskDetailModal task={taskDetail} commentsPage={taskDetailComments} loading={taskDetailLoading} close={() => setTaskDetail(null)} onPageChange={(next) => setTaskDetailPaging((current) => ({ ...current, ...next }))} />}
-      <BottomDrawer title="新增任务" open={taskDrawerOpen} height={taskDrawerHeight} setHeight={setTaskDrawerHeight} close={() => setTaskDrawerOpen(false)}>
-        <form className="form drawer-form" onSubmit={createTask}>
+      {taskDetail && <TaskDetailModal task={taskDetail} commentsPage={taskDetailComments} loading={taskDetailLoading} user={user} openAuth={openAuth} close={() => setTaskDetail(null)} onEdit={openEditTaskDrawer} onCreateComment={createTaskDetailComment} commentBusy={busy(`admin-task-detail-comment-${taskDetail.id}`)} onPageChange={(next) => setTaskDetailPaging((current) => ({ ...current, ...next }))} />}
+      <BottomDrawer title={editingTask ? "编辑任务" : "新增任务"} open={taskDrawerOpen} height={taskDrawerHeight} setHeight={setTaskDrawerHeight} close={closeTaskDrawer}>
+        <form className="form drawer-form" onSubmit={submitTask}>
           <div className="inline-form drawer-inline">
             <input placeholder="任务名称" value={taskForm.name} onChange={(event) => setTaskForm({ ...taskForm, name: event.target.value })} />
             <input type="number" placeholder="启动资金" value={taskForm.start_amount} onChange={(event) => setTaskForm({ ...taskForm, start_amount: event.target.value })} />
+            <input type="number" placeholder="排序值（留空自动）" value={taskForm.sort_order} onChange={(event) => setTaskForm({ ...taskForm, sort_order: event.target.value })} />
             <select value={taskForm.status} onChange={(event) => setTaskForm({ ...taskForm, status: event.target.value })}>{statusOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select>
+            <label className="drawer-check"><input type="checkbox" checked={taskForm.is_hidden} onChange={(event) => setTaskForm({ ...taskForm, is_hidden: event.target.checked })} />隐藏任务</label>
           </div>
           <MarkdownEditor value={taskForm.description} onChange={(description) => setTaskForm({ ...taskForm, description })} user={user} openAuth={openAuth} fill />
-          <div className="drawer-actions"><button type="button" className="btn" onClick={() => setTaskDrawerOpen(false)}>取消</button><button className="btn primary" disabled={busy("admin-create-task")} aria-busy={busy("admin-create-task")}>{loadingText(busy("admin-create-task"), "创建任务", "创建中...")}</button></div>
+          <div className="drawer-actions"><button type="button" className="btn" onClick={closeTaskDrawer}>取消</button><button className="btn primary" disabled={busy(editingTask ? `admin-update-task-${editingTask.id}` : "admin-create-task")} aria-busy={busy(editingTask ? `admin-update-task-${editingTask.id}` : "admin-create-task")}>{loadingText(busy(editingTask ? `admin-update-task-${editingTask.id}` : "admin-create-task"), editingTask ? "保存任务" : "创建任务", editingTask ? "保存中..." : "创建中...")}</button></div>
         </form>
       </BottomDrawer>
     </section>
@@ -1147,7 +1305,7 @@ function AdminTaskFilters({ filters, loading, updateFilters, resetFilters }) {
   );
 }
 
-function TaskAdminList({ tasks, updateTask, openDetail, busy }) {
+function TaskAdminList({ tasks, updateTask, openDetail, openEdit, busy }) {
   return (
     <div className="admin-list">
       {tasks.map((task) => {
@@ -1157,8 +1315,9 @@ function TaskAdminList({ tasks, updateTask, openDetail, busy }) {
             <button type="button" className="task-title-btn" onClick={() => openDetail(task)}><b>{task.sort_order}. {task.name}</b></button>
             <span className="source-chip">{sourceLabel(task.source)}</span>
             <span>{task.github_issue_url ? <a href={task.github_issue_url} target="_blank" rel="noreferrer">Issue #{task.github_issue_number}</a> : "未同步"}</span>
-            <span className={task.github_sync_error ? "sync-error" : "sync-ok"} title={task.github_sync_error || ""}>{task.github_sync_error ? "同步失败" : task.last_github_sync_at ? "已同步" : "待同步"}</span>
+            <span className={taskGithubSyncClass(task)} title={taskGithubSyncTitle(task)}>{taskGithubSyncLabel(task)}</span>
             <span>¥{task.start_amount} / ¥{task.donated_amount}</span>
+            <button className="btn" disabled={taskBusy} aria-busy={taskBusy} onClick={() => openEdit(task)}>编辑</button>
             <button className="btn" disabled={taskBusy} aria-busy={taskBusy} onClick={() => updateTask(task, { is_hidden: !task.is_hidden })}>{loadingText(taskBusy, task.is_hidden ? "取消隐藏" : "隐藏", "保存中...")}</button>
             <select value={task.status} disabled={taskBusy} aria-busy={taskBusy} onChange={(event) => updateTask(task, { status: event.target.value })}>{statusOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select>
           </div>
@@ -1168,10 +1327,29 @@ function TaskAdminList({ tasks, updateTask, openDetail, busy }) {
   );
 }
 
-function TaskDetailModal({ task, commentsPage, loading, close, onPageChange }) {
+function TaskDetailModal({ task, commentsPage, loading, user, openAuth, close, onEdit, onCreateComment, commentBusy, onPageChange }) {
   const comments = pageItems(commentsPage);
+  const [commentContent, setCommentContent] = useState("");
+  const [commentError, setCommentError] = useState("");
+
+  async function submitComment(event) {
+    event.preventDefault();
+    const content = commentContent.trim();
+    if (!content) {
+      setCommentError("请输入评论内容");
+      return;
+    }
+    setCommentError("");
+    try {
+      await onCreateComment(task, content);
+      setCommentContent("");
+    } catch (err) {
+      setCommentError(err.message);
+    }
+  }
+
   return (
-    <Modal title={`任务详情：${task.name}`} close={close} wide>
+    <Modal title={`任务详情：${task.name}`} close={close} actions={<button onClick={() => onEdit(task)}>编辑</button>} wide>
       <div className="task-detail">
         <div className="task-detail-grid">
           <DetailItem label="状态" value={task.status_label} />
@@ -1183,7 +1361,7 @@ function TaskDetailModal({ task, commentsPage, loading, close, onPageChange }) {
           <DetailItem label="创建时间" value={formatDate(task.created_at)} />
           <DetailItem label="更新时间" value={formatDate(task.updated_at)} />
           <DetailItem label="GitHub" value={task.github_issue_url ? <a href={task.github_issue_url} target="_blank" rel="noreferrer">Issue #{task.github_issue_number}</a> : "未同步"} />
-          <DetailItem label="同步状态" value={task.github_sync_error ? "同步失败" : task.last_github_sync_at ? "已同步" : "待同步"} />
+          <DetailItem label="同步状态" value={<span className={taskGithubSyncClass(task)} title={taskGithubSyncTitle(task)}>{taskGithubSyncLabel(task)}</span>} />
         </div>
         {task.github_sync_error && <Notice type="error" message={task.github_sync_error} />}
         <section className="task-detail-section">
@@ -1201,6 +1379,11 @@ function TaskDetailModal({ task, commentsPage, loading, close, onPageChange }) {
             </div>
           )}
           <Pagination pageData={commentsPage} loading={loading} onChange={onPageChange} />
+          <form className="form" onSubmit={submitComment}>
+            <MarkdownEditor value={commentContent} onChange={setCommentContent} user={user} openAuth={openAuth} compact />
+            {commentError && <Notice type="error" message={commentError} />}
+            <button className="btn primary" disabled={commentBusy || !commentContent.trim()} aria-busy={commentBusy}>{loadingText(commentBusy, "发布管理员评论", "发布中...")}</button>
+          </form>
         </section>
       </div>
     </Modal>
@@ -1231,6 +1414,49 @@ function sourceLabel(source) {
   if (source === "github") return "GitHub";
   if (source === "user") return "用户需求";
   return "管理员";
+}
+
+function taskGithubSyncStatus(task) {
+  if (task.github_sync_status) return task.github_sync_status;
+  if (task.github_sync_error) return "error";
+  if (!task.github_issue_number) return "unbound";
+  return task.last_github_sync_at ? "synced" : "pending";
+}
+
+function taskGithubSyncLabel(task) {
+  if (task.github_sync_status_label) return task.github_sync_status_label;
+  return {
+    unbound: "未同步",
+    pending: "待同步",
+    synced: "已同步",
+    error: "同步失败",
+  }[taskGithubSyncStatus(task)] || "待同步";
+}
+
+function taskGithubSyncClass(task) {
+  const status = taskGithubSyncStatus(task);
+  if (status === "error") return "sync-error";
+  if (status === "synced") return "sync-ok";
+  return "sync-pending";
+}
+
+function taskGithubSyncTitle(task) {
+  if (task.github_sync_error) return task.github_sync_error;
+  return task.last_github_sync_at ? `最后同步：${formatDate(task.last_github_sync_at)}` : "";
+}
+
+function patchQueuesGithubSync(task, patch) {
+  const fields = Object.keys(patch).filter((field) => taskPatchValueChanged(task, field, patch[field]));
+  const nextStatus = patch.status ?? task.status;
+  const movedOutOfReview = fields.includes("status") && task.status === "pending_review" && nextStatus !== "pending_review";
+  if (movedOutOfReview && task.source !== "github" && !task.github_issue_number) return true;
+  return Boolean(task.github_issue_number && fields.some((field) => ["name", "description", "status"].includes(field)));
+}
+
+function taskPatchValueChanged(task, field, value) {
+  if (value === undefined) return false;
+  if (["name", "description", "status"].includes(field)) return String(task[field] ?? "") !== String(value ?? "");
+  return task[field] !== value;
 }
 
 function CommentAdminList({ comments, action, busy }) {
@@ -1538,7 +1764,7 @@ function Gate({ openAuth }) {
   return <section className="panel"><div className="empty">需要登录后查看。<button className="btn primary" onClick={openAuth}>立即登录</button></div></section>;
 }
 
-function Modal({ title, close, children, wide = false }) {
+function Modal({ title, close, children, wide = false, actions = null }) {
   const modalRef = useRef(null);
   const handleKeyDown = useOverlayFocus(modalRef, close);
   return (
@@ -1552,7 +1778,7 @@ function Modal({ title, close, children, wide = false }) {
         aria-label={title}
         onKeyDown={handleKeyDown}
       >
-        <div className="modal-head"><h2>{title}</h2><button onClick={close}>关闭</button></div>
+        <div className="modal-head"><h2>{title}</h2><div className="row-actions">{actions}<button onClick={close}>关闭</button></div></div>
         {children}
       </div>
     </div>

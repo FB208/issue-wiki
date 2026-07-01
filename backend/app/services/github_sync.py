@@ -5,13 +5,14 @@ from decimal import Decimal
 from typing import Any
 
 import httpx
-from sqlalchemy import and_, func, or_
+from sqlalchemy import and_, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.db.session import SessionLocal
-from app.models import GitHubSyncEvent, Task, TaskComment, TaskSource, TaskStatus
+from app.models import GitHubSyncEvent, GitHubSyncStatus, Task, TaskComment, TaskSource, TaskStatus
+from app.services.task_ordering import normalize_task_sort_orders
 
 
 STATUS_LABEL_PREFIX = "issue-wiki/status:"
@@ -75,11 +76,6 @@ def parse_github_datetime(value: str | None) -> datetime | None:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
-def next_task_sort_order(db: Session) -> int:
-    current = db.query(func.max(Task.sort_order)).scalar()
-    return int(current or 0) + 1
-
-
 def issue_author_login(issue: dict[str, Any]) -> str | None:
     user = issue.get("user") or {}
     return user.get("login")
@@ -104,6 +100,7 @@ def apply_issue_mapping(task: Task, issue: dict[str, Any], repo: str) -> None:
     task.github_state = issue.get("state")
     task.github_updated_at = parse_github_datetime(issue.get("updated_at"))
     task.last_github_sync_at = now_utc()
+    task.github_sync_status = GitHubSyncStatus.synced.value
     task.github_sync_error = None
 
 
@@ -136,12 +133,14 @@ def upsert_task_from_issue(db: Session, issue: dict[str, Any], repo: str | None 
         raise GitHubSyncError("GITHUB_PROJECT_URL 必须是 GitHub 仓库地址")
 
     task = find_task_by_issue(db, repo_name, issue)
+    previous_status = task.status if task is not None else None
+    previous_sort_order = task.sort_order if task is not None else None
     created = False
     if task is None:
         task = Task(
             name=issue.get("title") or f"GitHub Issue #{issue.get('number')}",
             description=issue.get("body") or "",
-            sort_order=next_task_sort_order(db),
+            sort_order=0,
             start_amount=Decimal("0"),
             status=status_from_github_issue(issue),
             is_hidden=False,
@@ -156,9 +155,16 @@ def upsert_task_from_issue(db: Session, issue: dict[str, Any], repo: str | None 
             task.status = status_from_github_issue(issue)
 
     apply_issue_mapping(task, issue, repo_name)
+    normalize_task_sort_orders(db, task, github_task_requested_sort_order(task, previous_status, previous_sort_order, created))
     db.commit()
     db.refresh(task)
     return task, created
+
+
+def github_task_requested_sort_order(task: Task, previous_status: str | None, previous_sort_order: int | None, created: bool) -> int | None:
+    if created or task.status == TaskStatus.completed.value or previous_status == TaskStatus.completed.value:
+        return None
+    return previous_sort_order
 
 
 def ensure_status_label(client: GitHubClient, status: str) -> str:
@@ -213,6 +219,8 @@ def update_github_issue(client: GitHubClient, task: Task) -> dict[str, Any]:
 
 def sync_task_to_github(db: Session, task: Task, create_if_missing: bool = False) -> bool:
     if not sync_enabled():
+        task.github_sync_status = GitHubSyncStatus.pending.value
+        db.commit()
         return False
     try:
         client = GitHubClient()
@@ -227,6 +235,7 @@ def sync_task_to_github(db: Session, task: Task, create_if_missing: bool = False
         db.refresh(task)
         return True
     except Exception as exc:
+        task.github_sync_status = GitHubSyncStatus.error.value
         task.github_sync_error = str(exc)
         task.last_github_sync_at = now_utc()
         db.commit()
@@ -331,6 +340,7 @@ def sync_task_to_github_background(task_id: int, create_if_missing: bool = False
         db.rollback()
         task = db.get(Task, task_id)
         if task is not None:
+            task.github_sync_status = GitHubSyncStatus.error.value
             task.github_sync_error = str(exc)
             task.last_github_sync_at = now_utc()
             db.commit()

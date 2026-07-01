@@ -33,6 +33,21 @@ class TaskSource(str, Enum):
     github = "github"
 
 
+class GitHubSyncStatus(str, Enum):
+    unbound = "unbound"
+    pending = "pending"
+    synced = "synced"
+    error = "error"
+
+
+GITHUB_SYNC_STATUS_LABELS = {
+    GitHubSyncStatus.unbound.value: "未同步",
+    GitHubSyncStatus.pending.value: "待同步",
+    GitHubSyncStatus.synced.value: "已同步",
+    GitHubSyncStatus.error.value: "同步失败",
+}
+
+
 class PaymentStatus(str, Enum):
     pending = "pending"
     paid = "paid"
@@ -83,7 +98,7 @@ class Task(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(180), index=True)
     description: Mapped[str] = mapped_column(Text)
-    sort_order: Mapped[int] = mapped_column(unique=True, index=True)
+    sort_order: Mapped[int] = mapped_column(index=True)
     start_amount: Mapped[float] = mapped_column(Numeric(12, 2), default=0)
     status: Mapped[str] = mapped_column(String(32), default=TaskStatus.pending_start.value, index=True)
     is_hidden: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
@@ -98,6 +113,7 @@ class Task(Base):
     github_state: Mapped[str | None] = mapped_column(String(32), nullable=True)
     github_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_github_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    github_sync_status: Mapped[str] = mapped_column(String(32), default=GitHubSyncStatus.unbound.value, index=True)
     github_sync_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

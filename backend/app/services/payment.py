@@ -127,7 +127,7 @@ def process_afdian_order(db: Session, order_payload: dict[str, Any]) -> SponsorO
     return order
 
 
-def create_xorpay_sponsor_order(db: Session, task: Task, user: Any, amount_value: Any) -> tuple[SponsorOrder, dict[str, Any]]:
+def create_xorpay_sponsor_order(db: Session, task: Task | None, user: Any, amount_value: Any) -> tuple[SponsorOrder, dict[str, Any]]:
     if amount_value is None:
         raise PaymentValidationError("请输入赞助金额")
     amount = parse_order_amount(amount_value)
@@ -139,10 +139,10 @@ def create_xorpay_sponsor_order(db: Session, task: Task, user: Any, amount_value
     validate_xorpay_settings()
 
     order = SponsorOrder(
-        task_id=task.id,
+        task_id=task.id if task else None,
         user_id=getattr(user, "id", None),
         is_guest=user is None,
-        merchant_order_no=generate_merchant_order_no(task.id),
+        merchant_order_no=generate_merchant_order_no(task.id if task else None),
         amount=amount,
         channel=PaymentChannel.xorpay.value,
         status=PaymentStatus.pending.value,
@@ -250,8 +250,8 @@ def validate_xorpay_settings() -> None:
         raise PaymentConfigError(f"XorPay 配置不完整：{', '.join(missing)}")
 
 
-def build_xorpay_pay_payload(task: Task, order: SponsorOrder, user: Any) -> dict[str, str]:
-    name = f"赞助：{task.name}"[:120]
+def build_xorpay_pay_payload(task: Task | None, order: SponsorOrder, user: Any) -> dict[str, str]:
+    name = (f"赞助：{task.name}" if task else "打赏作者")[:120]
     price = format_amount(parse_order_amount(order.amount))
     notify_url = settings.xorpay_notify_url.strip()
     payload = {
@@ -260,7 +260,7 @@ def build_xorpay_pay_payload(task: Task, order: SponsorOrder, user: Any) -> dict
         "price": price,
         "order_id": order.merchant_order_no,
         "notify_url": notify_url,
-        "more": build_task_feature_id(task.id),
+        "more": build_task_feature_id(task.id) if task else "IW-AUTHOR-TIP",
         "expire": str(max(60, settings.xorpay_order_expire_seconds)),
     }
     order_uid = xorpay_order_uid(user)
@@ -312,9 +312,10 @@ def xorpay_sign(*parts: Any) -> str:
     return hashlib.md5(text.encode("utf-8")).hexdigest().lower()
 
 
-def generate_merchant_order_no(task_id: int) -> str:
+def generate_merchant_order_no(task_id: int | None) -> str:
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-    return f"IWX-{task_id}-{timestamp}-{uuid.uuid4().hex[:10]}"
+    target = task_id if task_id is not None else "TIP"
+    return f"IWX-{target}-{timestamp}-{uuid.uuid4().hex[:10]}"
 
 
 def xorpay_order_uid(user: Any) -> str | None:

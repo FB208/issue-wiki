@@ -4,7 +4,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, s
 from sqlalchemy import asc, desc, func
 from sqlalchemy.orm import Session
 
-from app.api.utils import next_sort_order, page_payload, paginate_query, serialize_task, serialize_task_with_metrics, task_metrics_query
+from app.api.utils import page_payload, paginate_query, serialize_task, serialize_task_with_metrics, task_metrics_query
 from app.dependencies import get_current_user, get_current_user_optional, get_db
 from app.models import PaymentChannel, SponsorOrder, Task, TaskComment, TaskSource, TaskStatus, User
 from app.schemas import CommentCreate, Page, SponsorCreate, SponsorIntentOut, SponsorOrderOut, TaskCommentOut, TaskDemandCreate, TaskOut
@@ -21,6 +21,7 @@ from app.services.payment import (
     sponsor_instructions,
     xorpay_min_order_amount,
 )
+from app.services.task_ordering import normalize_task_sort_orders
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
@@ -118,13 +119,15 @@ def create_demand(payload: TaskDemandCreate, user: User = Depends(get_current_us
     task = Task(
         name=payload.name,
         description=payload.description,
-        sort_order=next_sort_order(db, Task),
+        sort_order=0,
         start_amount=Decimal("0"),
         status=TaskStatus.pending_review.value,
         source=TaskSource.user.value,
         creator_id=user.id,
     )
     db.add(task)
+    db.flush()
+    normalize_task_sort_orders(db, task)
     db.commit()
     db.refresh(task)
     return serialize_task(db, task)

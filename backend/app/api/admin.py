@@ -8,10 +8,11 @@ from sqlalchemy.orm import Session
 from app.api.documents import serialize_document
 from app.api.utils import next_sort_order, page_payload, paginate_query, serialize_task, serialize_task_with_metrics, task_metrics_query
 from app.dependencies import get_current_admin, get_db
-from app.models import Document, DocumentComment, DocumentFolder, PaymentStatus, SponsorOrder, Task, TaskComment, TaskSource, TaskStatus, User, UserRole
-from app.schemas import AdminCommentOut, CommentAdminUpdate, DocumentCreate, DocumentOut, DocumentUpdate, FolderCreate, FolderOut, FolderUpdate, GitHubSyncSummary, HomeHeroOut, HomeHeroUpdate, Page, ReorderItem, SponsorOrderOut, TaskCommentOut, TaskCreateAdmin, TaskOut, TaskUpdateAdmin, UserOut
-from app.services.github_sync import GitHubSyncError, delete_comment_from_github_background, sync_historical_issues, sync_task_to_github_background
+from app.models import Document, DocumentComment, DocumentFolder, GitHubSyncStatus, PaymentStatus, SponsorOrder, Task, TaskComment, TaskSource, TaskStatus, User, UserRole
+from app.schemas import AdminCommentOut, CommentAdminUpdate, CommentCreate, DocumentCreate, DocumentOut, DocumentUpdate, FolderCreate, FolderOut, FolderUpdate, GitHubSyncSummary, HomeHeroOut, HomeHeroUpdate, Page, ReorderItem, SponsorOrderOut, TaskCommentOut, TaskCreateAdmin, TaskOut, TaskUpdateAdmin, UserOut
+from app.services.github_sync import GitHubSyncError, delete_comment_from_github_background, sync_comment_to_github_background, sync_historical_issues, sync_task_to_github_background
 from app.services.home_hero import get_home_hero, save_home_hero
+from app.services.task_ordering import normalize_task_sort_orders
 
 router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(get_current_admin)])
 
@@ -55,22 +56,21 @@ def admin_list_tasks(
         query = query.filter(Task.is_hidden.is_(False))
     elif visibility_value == "hidden":
         query = query.filter(Task.is_hidden.is_(True))
-    no_sync_error = or_(Task.github_sync_error.is_(None), Task.github_sync_error == "")
     if github_sync == "unbound":
-        query = query.filter(Task.github_issue_number.is_(None))
+        query = query.filter(Task.github_sync_status == GitHubSyncStatus.unbound.value)
     elif github_sync == "pending":
-        query = query.filter(Task.github_issue_number.isnot(None), no_sync_error, Task.last_github_sync_at.is_(None))
+        query = query.filter(Task.github_sync_status == GitHubSyncStatus.pending.value)
     elif github_sync == "synced":
-        query = query.filter(Task.last_github_sync_at.isnot(None), no_sync_error)
+        query = query.filter(Task.github_sync_status == GitHubSyncStatus.synced.value)
     elif github_sync == "error":
-        query = query.filter(Task.github_sync_error.isnot(None), Task.github_sync_error != "")
+        query = query.filter(Task.github_sync_status == GitHubSyncStatus.error.value)
     if github_issue_number is not None:
         query = query.filter(Task.github_issue_number == github_issue_number)
     if created_from:
         query = query.filter(Task.created_at >= datetime.combine(created_from, time.min))
     if created_to:
         query = query.filter(Task.created_at <= datetime.combine(created_to, time.max))
-    rows, total, page, page_size = paginate_query(query.order_by(Task.sort_order.asc()), page, page_size)
+    rows, total, page, page_size = paginate_query(query.order_by(Task.sort_order.asc(), Task.id.asc()), page, page_size)
     items = [serialize_task_with_metrics(task, donated_amount, co_creator_count) for task, donated_amount, co_creator_count in rows]
     return page_payload(items, total, page, page_size)
 
@@ -80,13 +80,15 @@ def admin_create_task(payload: TaskCreateAdmin, db: Session = Depends(get_db)) -
     task = Task(
         name=payload.name,
         description=payload.description,
-        sort_order=payload.sort_order or next_sort_order(db, Task),
+        sort_order=0,
         start_amount=payload.start_amount,
         status=payload.status.value,
         is_hidden=payload.is_hidden,
         source=TaskSource.admin.value,
     )
     db.add(task)
+    db.flush()
+    normalize_task_sort_orders(db, task, payload.sort_order)
     db.commit()
     db.refresh(task)
     return serialize_task(db, task)
@@ -103,30 +105,50 @@ def admin_update_task(
     if not task:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="任务不存在")
     previous_status = task.status
+    previous_sort_order = task.sort_order
     data = payload.model_dump(exclude_unset=True)
+    sort_order_requested = "sort_order" in data and data["sort_order"] is not None
+    requested_sort_order = data.pop("sort_order", None)
     if "status" in data and data["status"] is not None:
         data["status"] = data["status"].value
+    changed_fields = set()
     for key, value in data.items():
-        setattr(task, key, value)
+        if getattr(task, key) != value:
+            changed_fields.add(key)
+            setattr(task, key, value)
+    normalize_task_sort_orders(db, task, task_requested_sort_order(task, previous_status, previous_sort_order, requested_sort_order, sort_order_requested))
     db.commit()
     db.refresh(task)
-    schedule_task_github_sync_after_admin_update(background_tasks, task, previous_status, set(data.keys()))
+    schedule_task_github_sync_after_admin_update(db, background_tasks, task, previous_status, changed_fields)
     return serialize_task(db, task)
 
 
 @router.post("/tasks/reorder")
 def admin_reorder_tasks(items: list[ReorderItem], db: Session = Depends(get_db)) -> dict[str, str]:
-    for item in items:
-        task = db.get(Task, item.id)
-        if task:
-            task.sort_order = -abs(item.id)
-    db.flush()
-    for item in items:
-        task = db.get(Task, item.id)
-        if task:
-            task.sort_order = item.sort_order
+    requested_orders = {item.id: item.sort_order for item in items}
+    tasks = db.query(Task).filter(Task.id.in_(requested_orders)).all()
+    for task in tasks:
+        if task.status != TaskStatus.completed.value:
+            task.sort_order = requested_orders[task.id]
+    normalize_task_sort_orders(db)
     db.commit()
     return {"message": "排序已更新"}
+
+
+def task_requested_sort_order(
+    task: Task,
+    previous_status: str,
+    previous_sort_order: int,
+    requested_sort_order: int | None,
+    sort_order_requested: bool,
+) -> int | None:
+    if task.status == TaskStatus.completed.value:
+        return None
+    if sort_order_requested:
+        return requested_sort_order
+    if previous_status == TaskStatus.completed.value:
+        return None
+    return previous_sort_order
 
 
 @router.get("/tasks/{task_id}", response_model=TaskOut)
@@ -150,6 +172,25 @@ def admin_list_task_comments(
     query = db.query(TaskComment).filter(TaskComment.task_id == task_id, TaskComment.deleted_at.is_(None)).order_by(TaskComment.created_at.asc())
     comments, total, page, page_size = paginate_query(query, page, page_size)
     return page_payload([serialize_admin_task_comment(item) for item in comments], total, page, page_size)
+
+
+@router.post("/tasks/{task_id}/comments", response_model=TaskCommentOut)
+def admin_create_task_comment(
+    task_id: int,
+    payload: CommentCreate,
+    background_tasks: BackgroundTasks,
+    user: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+) -> TaskCommentOut:
+    task = db.get(Task, task_id)
+    if not task:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="任务不存在")
+    comment = TaskComment(task_id=task.id, user_id=user.id, content=payload.content)
+    db.add(comment)
+    db.commit()
+    db.refresh(comment)
+    background_tasks.add_task(sync_comment_to_github_background, comment.id)
+    return serialize_admin_task_comment(comment)
 
 
 @router.get("/home-hero", response_model=HomeHeroOut)
@@ -427,6 +468,7 @@ def serialize_admin_task_comment(item: TaskComment) -> TaskCommentOut:
 
 
 def schedule_task_github_sync_after_admin_update(
+    db: Session,
     background_tasks: BackgroundTasks,
     task: Task,
     previous_status: str,
@@ -438,9 +480,18 @@ def schedule_task_github_sync_after_admin_update(
         and task.status != TaskStatus.pending_review.value
     )
     if moved_out_of_review and task.source != TaskSource.github.value and task.github_issue_number is None:
+        mark_task_github_sync_pending(db, task)
         background_tasks.add_task(sync_task_to_github_background, task.id, True)
         return
     if task.github_issue_number is None:
         return
     if changed_fields.intersection({"name", "description", "status"}):
+        mark_task_github_sync_pending(db, task)
         background_tasks.add_task(sync_task_to_github_background, task.id, False)
+
+
+def mark_task_github_sync_pending(db: Session, task: Task) -> None:
+    task.github_sync_status = GitHubSyncStatus.pending.value
+    task.github_sync_error = None
+    db.commit()
+    db.refresh(task)

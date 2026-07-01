@@ -115,6 +115,8 @@ class TaskOut(OrmModel):
     github_state: str | None = None
     github_updated_at: datetime | None = None
     last_github_sync_at: datetime | None = None
+    github_sync_status: str
+    github_sync_status_label: str
     github_sync_error: str | None = None
     created_at: datetime
     updated_at: datetime

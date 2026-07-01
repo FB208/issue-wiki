@@ -4,7 +4,7 @@ from math import ceil
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.models import PaymentStatus, SponsorOrder, TASK_STATUS_LABELS, Task, TaskComment
+from app.models import GITHUB_SYNC_STATUS_LABELS, GitHubSyncStatus, PaymentStatus, SponsorOrder, TASK_STATUS_LABELS, Task, TaskComment
 from app.schemas import TaskOut
 
 DEFAULT_PAGE_SIZE = 20
@@ -79,6 +79,7 @@ def serialize_task(db: Session, task: Task) -> TaskOut:
 
 
 def serialize_task_with_metrics(task: Task, donated_amount, co_creator_count) -> TaskOut:
+    github_sync_status = task_github_sync_status(task)
     return TaskOut(
         id=task.id,
         name=task.name,
@@ -101,7 +102,21 @@ def serialize_task_with_metrics(task: Task, donated_amount, co_creator_count) ->
         github_state=task.github_state,
         github_updated_at=task.github_updated_at,
         last_github_sync_at=task.last_github_sync_at,
+        github_sync_status=github_sync_status,
+        github_sync_status_label=GITHUB_SYNC_STATUS_LABELS.get(github_sync_status, github_sync_status),
         github_sync_error=task.github_sync_error,
         created_at=task.created_at,
         updated_at=task.updated_at,
     )
+
+
+def task_github_sync_status(task: Task) -> str:
+    if task.github_sync_status:
+        return task.github_sync_status
+    if task.github_sync_error:
+        return GitHubSyncStatus.error.value
+    if task.github_issue_number is None:
+        return GitHubSyncStatus.unbound.value
+    if task.last_github_sync_at is None:
+        return GitHubSyncStatus.pending.value
+    return GitHubSyncStatus.synced.value
