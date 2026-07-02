@@ -108,6 +108,77 @@ button:disabled { cursor: not-allowed; opacity: .62; }
   font-weight: 800;
 }
 
+.nav-docs {
+  display: grid;
+  gap: 2px;
+}
+
+.nav-folder {
+  display: grid;
+  gap: 2px;
+}
+
+.nav-folder-toggle {
+  width: 100%;
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: #111827;
+  padding: 7px 10px 7px 12px;
+  text-align: left;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.nav-folder-toggle:hover {
+  background: #f8fafc;
+}
+
+.nav-folder-toggle.active {
+  color: var(--blue);
+}
+
+.nav-folder-toggle span:first-child,
+.nav .doc-nav-link {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nav-folder-chevron {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.nav-folder-items {
+  display: grid;
+  gap: 2px;
+  margin: 2px 0 8px;
+}
+
+.nav a.doc-nav-link {
+  min-height: 34px;
+  justify-content: flex-start;
+  border-radius: 10px;
+  padding-top: 7px;
+  padding-bottom: 7px;
+  font-size: 13px;
+}
+
+.nav-empty {
+  margin: 6px 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .badge {
   padding: 3px 8px;
   border-radius: 999px;

@@ -297,7 +297,7 @@ function Layout({ children, nav, user, logout, openAuth, openAuthorTip, mobileOp
           {user && <NavLink to="/mine/orders">我的赞助</NavLink>}
           {user?.role === "admin" && <NavLink to="/admin">管理员后台</NavLink>}
           <div className="nav-label">文档</div>
-          {nav.documents?.slice(0, 10).map((doc) => <NavLink key={doc.id} to={`/docs/${doc.id}`}>{doc.title}</NavLink>)}
+          <DocumentTreeNav nav={nav} />
         </nav>
       </aside>
       {mobileOpen && <div className="overlay" onClick={() => setMobileOpen(false)} />}
@@ -311,6 +311,105 @@ function Layout({ children, nav, user, logout, openAuth, openAuthorTip, mobileOp
         </header>
         {children}
       </main>
+    </div>
+  );
+}
+
+function DocumentTreeNav({ nav }) {
+  const location = useLocation();
+  const folders = nav.folders || [];
+  const documents = nav.documents || [];
+  const [collapsedFolders, setCollapsedFolders] = useState(() => new Set());
+  const folderMap = new Map(folders.map((folder) => [folder.id, folder]));
+  const folderChildren = new Map();
+  const topFolders = [];
+  const docsByFolder = new Map();
+  const rootDocuments = [];
+  const activeDocId = location.pathname.startsWith("/docs/") ? Number(location.pathname.split("/").pop()) : null;
+  const activeDocument = documents.find((doc) => Number(doc.id) === activeDocId);
+  const activeFolderIds = new Set();
+
+  folders.forEach((folder) => {
+    if (folder.parent_id && folderMap.has(folder.parent_id)) {
+      const children = folderChildren.get(folder.parent_id) || [];
+      children.push(folder);
+      folderChildren.set(folder.parent_id, children);
+    } else {
+      topFolders.push(folder);
+    }
+  });
+
+  documents.forEach((doc) => {
+    if (doc.folder_id && folderMap.has(doc.folder_id)) {
+      const docs = docsByFolder.get(doc.folder_id) || [];
+      docs.push(doc);
+      docsByFolder.set(doc.folder_id, docs);
+    } else {
+      rootDocuments.push(doc);
+    }
+  });
+
+  let currentFolderId = activeDocument?.folder_id;
+  while (currentFolderId && folderMap.has(currentFolderId)) {
+    activeFolderIds.add(currentFolderId);
+    currentFolderId = folderMap.get(currentFolderId).parent_id;
+  }
+
+  function toggleFolder(event, folderId) {
+    event.stopPropagation();
+    setCollapsedFolders((current) => {
+      const next = new Set(current);
+      if (next.has(folderId)) next.delete(folderId);
+      else next.add(folderId);
+      return next;
+    });
+  }
+
+  function docLink(doc, depth) {
+    return (
+      <NavLink key={doc.id} className={({ isActive }) => `doc-nav-link${isActive ? " active" : ""}`} style={{ paddingLeft: `${12 + depth * 14}px` }} to={`/docs/${doc.id}`} end>
+        {doc.title}
+      </NavLink>
+    );
+  }
+
+  function folderGroup(folder, depth = 0, ancestors = new Set()) {
+    if (ancestors.has(folder.id)) return null;
+    const nextAncestors = new Set(ancestors);
+    nextAncestors.add(folder.id);
+    const childFolders = folderChildren.get(folder.id) || [];
+    const folderDocs = docsByFolder.get(folder.id) || [];
+    const hasChildren = childFolders.length > 0 || folderDocs.length > 0;
+    const isActive = activeFolderIds.has(folder.id);
+    const isOpen = isActive || !collapsedFolders.has(folder.id);
+    return (
+      <div key={folder.id} className="nav-folder">
+        <button
+          type="button"
+          className={`nav-folder-toggle${isActive ? " active" : ""}`}
+          style={{ paddingLeft: `${12 + depth * 14}px` }}
+          aria-expanded={isOpen}
+          onClick={(event) => toggleFolder(event, folder.id)}
+        >
+          <span>{folder.name}</span>
+          {hasChildren ? <span className="nav-folder-chevron">{isOpen ? "v" : ">"}</span> : null}
+        </button>
+        {hasChildren && isOpen ? (
+          <div className="nav-folder-items">
+            {childFolders.map((child) => folderGroup(child, depth + 1, nextAncestors))}
+            {folderDocs.map((doc) => docLink(doc, depth + 1))}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
+  if (!folders.length && !documents.length) return <div className="nav-empty">暂无文档</div>;
+
+  return (
+    <div className="nav-docs">
+      {rootDocuments.map((doc) => docLink(doc, 0))}
+      {topFolders.map((folder) => folderGroup(folder))}
     </div>
   );
 }
