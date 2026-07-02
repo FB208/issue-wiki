@@ -63,30 +63,6 @@
         "group": "single",
         "order": 1
       }
-    },
-    {
-      "name": "Browser: Edge",
-      "type": "msedge",
-      "request": "launch",
-      "url": "http://127.0.0.1:5173",
-      "webRoot": "${workspaceFolder}/frontend/src",
-      "sourceMaps": true,
-      "presentation": {
-        "group": "single",
-        "order": 2
-      }
-    },
-    {
-      "name": "Browser: Chrome",
-      "type": "chrome",
-      "request": "launch",
-      "url": "http://127.0.0.1:5173",
-      "webRoot": "${workspaceFolder}/frontend/src",
-      "sourceMaps": true,
-      "presentation": {
-        "group": "single",
-        "order": 3
-      }
     }
   ],
   "compounds": [

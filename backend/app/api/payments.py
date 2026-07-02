@@ -2,12 +2,13 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from fastapi.responses import PlainTextResponse
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.dependencies import get_current_user_optional, get_db
-from app.models import PaymentChannel, SponsorOrder, User
-from app.schemas import PaymentConfigOut, SponsorCreate, SponsorIntentOut, SponsorOrderOut
+from app.models import PaymentChannel, PaymentStatus, SponsorOrder, User
+from app.schemas import PaymentConfigOut, PaymentSummaryOut, SponsorCreate, SponsorIntentOut, SponsorOrderOut
 from app.services.payment import (
     PaymentConfigError,
     PaymentProviderError,
@@ -33,6 +34,14 @@ def payment_config() -> PaymentConfigOut:
     except PaymentConfigError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return PaymentConfigOut(channel=channel, xorpay_min_order_amount=xorpay_min_order_amount())
+
+
+@router.get("/summary", response_model=PaymentSummaryOut)
+def payment_summary(db: Session = Depends(get_db)) -> PaymentSummaryOut:
+    paid_amount = db.query(func.coalesce(func.sum(SponsorOrder.amount), 0)).filter(
+        SponsorOrder.status == PaymentStatus.paid.value,
+    ).scalar()
+    return PaymentSummaryOut(paid_amount=paid_amount or 0)
 
 
 @router.get("/orders/{merchant_order_no}", response_model=SponsorOrderOut)

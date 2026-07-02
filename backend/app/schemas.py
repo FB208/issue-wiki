@@ -148,6 +148,10 @@ class PaymentConfigOut(BaseModel):
     xorpay_min_order_amount: Decimal
 
 
+class PaymentSummaryOut(BaseModel):
+    paid_amount: Decimal
+
+
 class SponsorCreate(BaseModel):
     amount: Decimal | None = Field(default=None, gt=0)
 

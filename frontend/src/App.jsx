@@ -38,17 +38,18 @@ const githubSyncOptions = [
 const defaultStatuses = ["pending_start", "in_progress"];
 const defaultPageParams = { page: 1, page_size: 20 };
 const pageSizeOptions = [10, 20, 50];
+const defaultSponsorAmount = "100";
+const sponsorAmountOptions = ["10", "50", "100", "1000"];
 
 function createDefaultAdminTaskFilters() {
   return {
-    q: "",
+    name: "",
     status: [],
+    sort_by: "sort_order",
+    sort_order: "asc",
     source: [],
     visibility: "all",
     github_sync: "all",
-    github_issue_number: "",
-    created_from: "",
-    created_to: "",
   };
 }
 
@@ -190,6 +191,7 @@ function useToast() {
 export default function App() {
   const [user, setUser] = useState(null);
   const [nav, setNav] = useState({ folders: [], documents: [] });
+  const [paymentSummary, setPaymentSummary] = useState({ paid_amount: "0" });
   const [authOpen, setAuthOpen] = useState(false);
   const [authorTipOpen, setAuthorTipOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -211,9 +213,18 @@ export default function App() {
     }
   }
 
+  async function loadPaymentSummary() {
+    try {
+      setPaymentSummary(await request("/payments/summary"));
+    } catch {
+      setPaymentSummary({ paid_amount: "0" });
+    }
+  }
+
   useEffect(() => {
     loadUser();
     loadNavigation();
+    loadPaymentSummary();
   }, []);
 
   function logout() {
@@ -225,7 +236,7 @@ export default function App() {
     <ToastProvider>
       <Layout nav={nav} user={user} logout={logout} openAuth={() => setAuthOpen(true)} openAuthorTip={() => setAuthorTipOpen(true)} mobileOpen={mobileOpen} setMobileOpen={setMobileOpen}>
         <Routes>
-          <Route path="/" element={<HomePage user={user} openAuth={() => setAuthOpen(true)} />} />
+          <Route path="/" element={<HomePage user={user} openAuth={() => setAuthOpen(true)} paidAmount={paymentSummary.paid_amount} refreshPaymentSummary={loadPaymentSummary} />} />
           <Route path="/tasks/:taskId" element={<TaskDetailPage user={user} openAuth={() => setAuthOpen(true)} />} />
           <Route path="/docs" element={<DocumentsPage nav={nav} user={user} openAuth={() => setAuthOpen(true)} />} />
           <Route path="/docs/:documentId" element={<DocumentsPage nav={nav} user={user} openAuth={() => setAuthOpen(true)} />} />
@@ -235,7 +246,7 @@ export default function App() {
         </Routes>
       </Layout>
       {authOpen && <AuthModal close={() => setAuthOpen(false)} onAuthed={loadUser} />}
-      {authorTipOpen && <SponsorModal close={() => setAuthorTipOpen(false)} />}
+      {authorTipOpen && <SponsorModal close={() => setAuthorTipOpen(false)} onDone={loadPaymentSummary} />}
     </ToastProvider>
   );
 }
@@ -246,7 +257,7 @@ function Layout({ children, nav, user, logout, openAuth, openAuthorTip, mobileOp
       <button className="mobile-menu" onClick={() => setMobileOpen(true)}>菜单</button>
       <aside className={`sidebar ${mobileOpen ? "open" : ""}`}>
         <div className="brand">
-          <div className="logo">IW</div>
+          <img className="logo" src="/logo.png" alt="Issue Wiki" />
           <div>
             <b>Issue Wiki</b>
             <span>开源任务控制台</span>
@@ -279,7 +290,7 @@ function Layout({ children, nav, user, logout, openAuth, openAuthorTip, mobileOp
   );
 }
 
-function HomePage({ user, openAuth }) {
+function HomePage({ user, openAuth, paidAmount, refreshPaymentSummary }) {
   const [tasksPage, setTasksPage] = useState(() => emptyPage());
   const [pagination, setPagination] = useState(defaultPageParams);
   const [heroContent, setHeroContent] = useState("");
@@ -321,8 +332,12 @@ function HomePage({ user, openAuth }) {
     setPagination((current) => ({ ...current, page: 1 }));
   }
 
+  async function refreshAfterSponsorPaid() {
+    await Promise.all([loadTasks(), refreshPaymentSummary?.()]);
+  }
+
   const tasks = pageItems(tasksPage);
-  const totalSponsored = tasks.reduce((sum, task) => sum + Number(task.donated_amount || 0), 0);
+  const totalSponsored = Number(paidAmount || 0);
   const coCreators = tasks.reduce((sum, task) => sum + Number(task.co_creator_count || 0), 0);
 
   return (
@@ -377,7 +392,7 @@ function HomePage({ user, openAuth }) {
       </section>
 
       {demandOpen && <DemandModal user={user} openAuth={openAuth} close={() => setDemandOpen(false)} onDone={loadTasks} />}
-      {sponsorTask && <SponsorModal task={sponsorTask} close={() => setSponsorTask(null)} onDone={loadTasks} />}
+      {sponsorTask && <SponsorModal task={sponsorTask} close={() => setSponsorTask(null)} onDone={refreshAfterSponsorPaid} />}
     </>
   );
 }
@@ -469,7 +484,7 @@ function DemandModal({ user, openAuth, close, onDone }) {
 
 function SponsorModal({ task, close, onDone }) {
   const [paymentConfig, setPaymentConfig] = useState(null);
-  const [amount, setAmount] = useState("");
+  const [amount, setAmount] = useState(defaultSponsorAmount);
   const [intent, setIntent] = useState(null);
   const [polling, setPolling] = useState(false);
   const [error, setError] = useState("");
@@ -480,6 +495,7 @@ function SponsorModal({ task, close, onDone }) {
   const featureId = isTaskSponsor ? `IW-TASK-${task.id}` : "";
   const sponsorTitle = isTaskSponsor ? `赞助：${task.name}` : "打赏作者";
   const sponsorEndpoint = isTaskSponsor ? `/tasks/${task.id}/sponsor` : "/payments/tip";
+  const amountLabel = isTaskSponsor ? "赞助金额" : "打赏金额";
   const channel = paymentConfig?.channel;
   const isAfdian = channel === "afdian";
   const isXorpay = channel === "xorpay";
@@ -490,7 +506,6 @@ function SponsorModal({ task, close, onDone }) {
     request("/payments/config").then((result) => {
       if (!active) return;
       setPaymentConfig(result);
-      if (result.channel === "xorpay") setAmount((current) => current || String(result.xorpay_min_order_amount || "1.00"));
     }).catch((err) => {
       if (active) setError(err.message);
     });
@@ -586,9 +601,21 @@ function SponsorModal({ task, close, onDone }) {
         )}
         {isXorpay && (
           <>
-            <label>赞助金额
+            <label>{amountLabel}
               <input type="number" min={paymentConfig.xorpay_min_order_amount} step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} />
             </label>
+            <div className="amount-shortcuts" aria-label="快捷选择金额">
+              {sponsorAmountOptions.map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  className={`btn amount-shortcut${Number(amount) === Number(option) ? " active" : ""}`}
+                  onClick={() => setAmount(option)}
+                >
+                  ¥{option}
+                </button>
+              ))}
+            </div>
             <p className="muted">当前最小订单金额：¥{paymentConfig.xorpay_min_order_amount}。提交后会生成微信扫码支付二维码。</p>
             {intent?.qr_image_url && (
               <div className="sponsor-payment-card">
@@ -937,7 +964,7 @@ function AdminPage({ user, openAuth, refreshNav }) {
   const notify = useToast();
   const { busy, runBusy } = useBusyActions();
   const activePaging = adminPaging[tab] || defaultPageParams;
-  const deferredAdminTaskQuery = useDeferredValue(adminTaskFilters.q);
+  const deferredAdminTaskName = useDeferredValue(adminTaskFilters.name);
 
   function updateAdminPaging(key, patch) {
     setAdminPaging((current) => ({ ...current, [key]: { ...(current[key] || defaultPageParams), ...patch } }));
@@ -956,14 +983,13 @@ function AdminPage({ user, openAuth, refreshNav }) {
   function adminTaskQueryParams() {
     return {
       ...activePaging,
-      q: deferredAdminTaskQuery.trim(),
+      name: deferredAdminTaskName.trim(),
       status: adminTaskFilters.status.length ? adminTaskFilters.status : undefined,
+      sort_by: adminTaskFilters.sort_by,
+      sort_order: adminTaskFilters.sort_order,
       source: adminTaskFilters.source.length ? adminTaskFilters.source : undefined,
       visibility: adminTaskFilters.visibility,
       github_sync: adminTaskFilters.github_sync,
-      github_issue_number: adminTaskFilters.github_issue_number,
-      created_from: adminTaskFilters.created_from,
-      created_to: adminTaskFilters.created_to,
     };
   }
 
@@ -1055,14 +1081,13 @@ function AdminPage({ user, openAuth, refreshNav }) {
     user?.id,
     activePaging.page,
     activePaging.page_size,
-    deferredAdminTaskQuery,
+    deferredAdminTaskName,
     adminTaskFilters.status.join(","),
+    adminTaskFilters.sort_by,
+    adminTaskFilters.sort_order,
     adminTaskFilters.source.join(","),
     adminTaskFilters.visibility,
     adminTaskFilters.github_sync,
-    adminTaskFilters.github_issue_number,
-    adminTaskFilters.created_from,
-    adminTaskFilters.created_to,
   ]);
   useEffect(() => { if (taskDetail?.id) loadTaskDetail(taskDetail.id); }, [taskDetail?.id, taskDetailPaging.page, taskDetailPaging.page_size]);
 
@@ -1250,27 +1275,27 @@ function AdminTaskFilters({ filters, loading, updateFilters, resetFilters }) {
     <div className="admin-task-filters">
       <div className="filters admin-task-filter-row">
         <input
-          value={filters.q}
-          placeholder="关键词 / GitHub 作者 / Issue"
+          value={filters.name}
+          placeholder="任务名称模糊查询"
           disabled={loading}
-          onChange={(event) => updateFilters({ q: event.target.value })}
+          onChange={(event) => updateFilters({ name: event.target.value })}
         />
-        <input
-          type="number"
-          min="1"
-          value={filters.github_issue_number}
-          placeholder="Issue 编号"
-          disabled={loading}
-          onChange={(event) => updateFilters({ github_issue_number: event.target.value })}
-        />
+        <select value={filters.sort_by} disabled={loading} onChange={(event) => updateFilters({ sort_by: event.target.value })}>
+          <option value="sort_order">顺序</option>
+          <option value="name">名称</option>
+          <option value="start_amount">启动资金</option>
+          <option value="donated_amount">已赞助金额</option>
+        </select>
+        <select value={filters.sort_order} disabled={loading} onChange={(event) => updateFilters({ sort_order: event.target.value })}>
+          <option value="asc">升序</option>
+          <option value="desc">降序</option>
+        </select>
         <select value={filters.visibility} disabled={loading} onChange={(event) => updateFilters({ visibility: event.target.value })}>
           {visibilityOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
         </select>
         <select value={filters.github_sync} disabled={loading} onChange={(event) => updateFilters({ github_sync: event.target.value })}>
           {githubSyncOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
         </select>
-        <input type="date" value={filters.created_from} disabled={loading} onChange={(event) => updateFilters({ created_from: event.target.value })} />
-        <input type="date" value={filters.created_to} disabled={loading} onChange={(event) => updateFilters({ created_to: event.target.value })} />
         <button type="button" className="btn" disabled={loading} onClick={resetFilters}>重置</button>
       </div>
       <div className="status-filter admin-task-filter-checks">

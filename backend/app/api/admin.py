@@ -1,4 +1,4 @@
-from datetime import date, datetime, time, timezone
+from datetime import datetime, timezone
 from typing import Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
@@ -19,42 +19,29 @@ router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(get_cu
 
 @router.get("/tasks", response_model=Page[TaskOut])
 def admin_list_tasks(
-    q: str | None = None,
     name: str | None = None,
     status_list: list[str] | None = Query(default=None, alias="status"),
+    sort_by: str = "sort_order",
+    sort_order: str = "asc",
     source_list: list[str] | None = Query(default=None, alias="source"),
-    visibility: Literal["all", "visible", "hidden"] | None = Query(default=None),
+    visibility: Literal["all", "visible", "hidden"] = "all",
     github_sync: Literal["all", "unbound", "pending", "synced", "error"] = "all",
-    github_issue_number: int | None = Query(default=None, ge=1),
-    created_from: date | None = None,
-    created_to: date | None = None,
-    include_hidden: bool = True,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db),
 ) -> Page[TaskOut]:
-    query, _, _ = task_metrics_query(db)
-    search_text = (q or name or "").strip()
-    if search_text:
-        keyword = f"%{search_text}%"
-        search_filters = [
-            Task.name.like(keyword),
-            Task.description.like(keyword),
-            Task.github_author_login.like(keyword),
-        ]
-        if search_text.isdigit():
-            search_filters.append(Task.github_issue_number == int(search_text))
-        query = query.filter(or_(*search_filters))
+    query, donated, _ = task_metrics_query(db)
+    if name:
+        query = query.filter(Task.name.like(f"%{name}%"))
     statuses = [item for item in (status_list or []) if item]
     sources = [item for item in (source_list or []) if item]
     if statuses:
         query = query.filter(Task.status.in_(statuses))
     if sources:
         query = query.filter(Task.source.in_(sources))
-    visibility_value = visibility or ("all" if include_hidden else "visible")
-    if visibility_value == "visible":
+    if visibility == "visible":
         query = query.filter(Task.is_hidden.is_(False))
-    elif visibility_value == "hidden":
+    elif visibility == "hidden":
         query = query.filter(Task.is_hidden.is_(True))
     if github_sync == "unbound":
         query = query.filter(Task.github_sync_status == GitHubSyncStatus.unbound.value)
@@ -64,13 +51,16 @@ def admin_list_tasks(
         query = query.filter(Task.github_sync_status == GitHubSyncStatus.synced.value)
     elif github_sync == "error":
         query = query.filter(Task.github_sync_status == GitHubSyncStatus.error.value)
-    if github_issue_number is not None:
-        query = query.filter(Task.github_issue_number == github_issue_number)
-    if created_from:
-        query = query.filter(Task.created_at >= datetime.combine(created_from, time.min))
-    if created_to:
-        query = query.filter(Task.created_at <= datetime.combine(created_to, time.max))
-    rows, total, page, page_size = paginate_query(query.order_by(Task.sort_order.asc(), Task.id.asc()), page, page_size)
+    donated_col = func.coalesce(donated.c.donated_amount, 0)
+    sort_map = {
+        "sort_order": Task.sort_order,
+        "name": Task.name,
+        "start_amount": Task.start_amount,
+        "donated_amount": donated_col,
+    }
+    sort_col = sort_map.get(sort_by, Task.sort_order)
+    sort_expr = desc(sort_col) if sort_order == "desc" else asc(sort_col)
+    rows, total, page, page_size = paginate_query(query.order_by(sort_expr, Task.id.asc()), page, page_size)
     items = [serialize_task_with_metrics(task, donated_amount, co_creator_count) for task, donated_amount, co_creator_count in rows]
     return page_payload(items, total, page, page_size)
 
