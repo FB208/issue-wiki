@@ -291,6 +291,7 @@ export default function App() {
       <Layout nav={nav} user={user} logout={logout} openAuth={() => setAuthOpen(true)} openAuthorTip={() => setAuthorTipOpen(true)} mobileOpen={mobileOpen} setMobileOpen={setMobileOpen}>
         <Routes>
           <Route path="/" element={<HomePage user={user} openAuth={() => setAuthOpen(true)} paidAmount={paymentSummary.paid_amount} sponsorRanking={sponsorRanking} refreshPaymentSummary={refreshSponsorData} />} />
+          <Route path="/thanks" element={<SponsorThanksPage sponsorRanking={sponsorRanking} />} />
           <Route path="/tasks/:taskId" element={<TaskDetailPage user={user} openAuth={() => setAuthOpen(true)} />} />
           <Route path="/docs" element={<DocumentsPage nav={nav} user={user} openAuth={() => setAuthOpen(true)} />} />
           <Route path="/docs/:documentId" element={<DocumentsPage nav={nav} user={user} openAuth={() => setAuthOpen(true)} />} />
@@ -323,6 +324,7 @@ function Layout({ children, nav, user, logout, openAuth, openAuthorTip, mobileOp
         <nav className="nav" onClick={() => setMobileOpen(false)}>
           <div className="nav-label">工作区</div>
           <NavLink to="/" end>赞助功能 <span className="badge">首页</span></NavLink>
+          <NavLink to="/thanks">鸣谢清单</NavLink>
           {user && <NavLink to="/mine/tasks">我的需求</NavLink>}
           {user && <NavLink to="/mine/orders">我的赞助</NavLink>}
           {user?.role === "admin" && <NavLink to="/admin">管理员后台</NavLink>}
@@ -516,7 +518,7 @@ function HomePage({ user, openAuth, paidAmount, sponsorRanking, refreshPaymentSu
             <Metric title="已赞助" value={formatMoney(totalSponsored)} />
             <Metric title="共创人数" value={coCreators} />
           </div>
-          <SponsorRanking items={sponsorRanking} />
+          <SponsorRanking items={sponsorRanking} limit={3} includeGuest={false} />
         </div>
       </section>
 
@@ -568,13 +570,14 @@ function Metric({ title, value }) {
   return <div className="metric"><span>{title}</span><b>{value}</b></div>;
 }
 
-function SponsorRanking({ items }) {
-  const ranking = Array.isArray(items) ? items : [];
+function SponsorRanking({ items, title = "赞助排行", limit = null, includeGuest = true }) {
+  let ranking = Array.isArray(items) ? items : [];
+  if (!includeGuest) ranking = ranking.filter((item) => !item.is_guest);
+  if (limit) ranking = ranking.slice(0, limit);
   return (
     <div className="sponsor-ranking">
       <div className="sponsor-ranking-head">
-        <h3>赞助排行</h3>
-        <span>按赞助金额排序</span>
+        <h3>{title}</h3>
       </div>
       {!ranking.length ? <div className="sponsor-ranking-empty">暂无赞助记录</div> : (
         <div className="sponsor-ranking-list">
@@ -592,6 +595,10 @@ function SponsorRanking({ items }) {
       )}
     </div>
   );
+}
+
+function SponsorThanksPage({ sponsorRanking }) {
+  return <section className="thanks-page"><SponsorRanking items={sponsorRanking} title="鸣谢清单" /></section>;
 }
 
 function TaskTable({ tasks, onSponsor, startIndex = 0 }) {

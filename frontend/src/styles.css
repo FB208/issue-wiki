@@ -490,9 +490,7 @@ button:disabled { cursor: not-allowed; opacity: .62; }
 
 .sponsor-ranking-head {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
+  align-items: center;
   padding: 14px 16px 10px;
   border-bottom: 1px solid var(--line);
 }
@@ -502,10 +500,13 @@ button:disabled { cursor: not-allowed; opacity: .62; }
   font-size: 16px;
 }
 
-.sponsor-ranking-head span,
 .sponsor-ranking-empty {
   color: var(--muted);
   font-size: 13px;
+}
+
+.thanks-page {
+  max-width: 920px;
 }
 
 .sponsor-ranking-empty {
