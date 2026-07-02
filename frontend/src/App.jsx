@@ -1,6 +1,6 @@
 import { createContext, startTransition, useContext, useDeferredValue, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
-import { Link, NavLink, Route, Routes, useNavigate, useParams } from "react-router-dom";
+import { Link, NavLink, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
 import MDEditor, { commands } from "@uiw/react-md-editor";
 import "@uiw/react-md-editor/markdown-editor.css";
 import "@uiw/react-markdown-preview/markdown.css";
@@ -57,6 +57,14 @@ function createDefaultTaskForm() {
   return { name: "", description: "", start_amount: "0", sort_order: "", status: "pending_start", is_hidden: false };
 }
 
+function createDefaultDocumentForm() {
+  return { title: "", content: "", folder_id: "" };
+}
+
+function createDefaultFolderForm() {
+  return { name: "", parent_id: "", sort_order: "" };
+}
+
 function taskFormPayload(form) {
   return {
     name: form.name,
@@ -66,6 +74,23 @@ function taskFormPayload(form) {
     status: form.status,
     is_hidden: form.is_hidden,
   };
+}
+
+function documentFormPayload(form) {
+  return {
+    title: form.title,
+    content: form.content,
+    folder_id: form.folder_id ? Number(form.folder_id) : null,
+  };
+}
+
+function folderFormPayload(form) {
+  const payload = {
+    name: form.name,
+    parent_id: form.parent_id ? Number(form.parent_id) : null,
+  };
+  if (form.sort_order !== "") payload.sort_order = Number(form.sort_order);
+  return payload;
 }
 
 function emptyPage(params = defaultPageParams) {
@@ -242,7 +267,7 @@ export default function App() {
           <Route path="/docs/:documentId" element={<DocumentsPage nav={nav} user={user} openAuth={() => setAuthOpen(true)} />} />
           <Route path="/mine/tasks" element={<MinePage type="tasks" user={user} openAuth={() => setAuthOpen(true)} />} />
           <Route path="/mine/orders" element={<MinePage type="orders" user={user} openAuth={() => setAuthOpen(true)} />} />
-          <Route path="/admin" element={<AdminPage user={user} openAuth={() => setAuthOpen(true)} refreshNav={loadNavigation} />} />
+          <Route path="/admin/*" element={<AdminPage user={user} openAuth={() => setAuthOpen(true)} refreshNav={loadNavigation} />} />
         </Routes>
       </Layout>
       {authOpen && <AuthModal close={() => setAuthOpen(false)} onAuthed={loadUser} />}
@@ -930,7 +955,10 @@ function MinePage({ type, user, openAuth }) {
 }
 
 function AdminPage({ user, openAuth, refreshNav }) {
-  const [tab, setTab] = useState("tasks");
+  const location = useLocation();
+  const navigate = useNavigate();
+  const routeTab = location.pathname === "/admin/folders" ? "folders" : location.pathname === "/admin/documents" ? "documents" : "";
+  const [tab, setTab] = useState(routeTab || "tasks");
   const [data, setData] = useState({
     tasks: emptyPage(),
     documents: emptyPage(),
@@ -942,6 +970,7 @@ function AdminPage({ user, openAuth, refreshNav }) {
   const [adminPaging, setAdminPaging] = useState({
     tasks: defaultPageParams,
     documents: defaultPageParams,
+    folders: { page: 1, page_size: 100 },
     users: defaultPageParams,
     comments: defaultPageParams,
     orders: defaultPageParams,
@@ -956,8 +985,14 @@ function AdminPage({ user, openAuth, refreshNav }) {
   const [taskDetailComments, setTaskDetailComments] = useState(() => emptyPage());
   const [taskDetailPaging, setTaskDetailPaging] = useState(defaultPageParams);
   const [taskDetailLoading, setTaskDetailLoading] = useState(false);
-  const [folderForm, setFolderForm] = useState({ name: "" });
-  const [docForm, setDocForm] = useState({ title: "", content: "", folder_id: "", author: "生产力Mark" });
+  const [folderForm, setFolderForm] = useState(createDefaultFolderForm);
+  const [editingFolder, setEditingFolder] = useState(null);
+  const [folderDrawerOpen, setFolderDrawerOpen] = useState(false);
+  const [folderDrawerHeight, setFolderDrawerHeight] = useState(58);
+  const [docForm, setDocForm] = useState(createDefaultDocumentForm);
+  const [editingDocument, setEditingDocument] = useState(null);
+  const [documentDrawerOpen, setDocumentDrawerOpen] = useState(false);
+  const [documentDrawerHeight, setDocumentDrawerHeight] = useState(72);
   const [githubSyncResult, setGithubSyncResult] = useState(null);
   const [adminLoading, setAdminLoading] = useState(false);
   const [error, setError] = useState("");
@@ -979,6 +1014,22 @@ function AdminPage({ user, openAuth, refreshNav }) {
     setAdminTaskFilters(createDefaultAdminTaskFilters());
     updateAdminPaging("tasks", { page: 1 });
   }
+
+  function switchAdminTab(nextTab) {
+    if (nextTab === "documents") navigate("/admin/documents");
+    else if (location.pathname !== "/admin") navigate("/admin");
+    setTab(nextTab);
+  }
+
+  useEffect(() => {
+    if (routeTab) {
+      setTab(routeTab);
+      return;
+    }
+    if (location.pathname === "/admin") {
+      setTab((current) => (current === "documents" || current === "folders" ? "tasks" : current));
+    }
+  }, [routeTab, location.pathname]);
 
   function adminTaskQueryParams() {
     return {
@@ -1024,6 +1075,50 @@ function AdminPage({ user, openAuth, refreshNav }) {
     setTaskForm(createDefaultTaskForm());
   }
 
+  function openCreateDocumentDrawer() {
+    setEditingDocument(null);
+    setDocForm(createDefaultDocumentForm());
+    setDocumentDrawerOpen(true);
+  }
+
+  function openEditDocumentDrawer(doc) {
+    setEditingDocument(doc);
+    setDocForm({
+      title: doc.title || "",
+      content: doc.content || "",
+      folder_id: doc.folder_id == null ? "" : String(doc.folder_id),
+    });
+    setDocumentDrawerOpen(true);
+  }
+
+  function closeDocumentDrawer() {
+    setDocumentDrawerOpen(false);
+    setEditingDocument(null);
+    setDocForm(createDefaultDocumentForm());
+  }
+
+  function openCreateFolderDrawer() {
+    setEditingFolder(null);
+    setFolderForm(createDefaultFolderForm());
+    setFolderDrawerOpen(true);
+  }
+
+  function openEditFolderDrawer(folder) {
+    setEditingFolder(folder);
+    setFolderForm({
+      name: folder.name || "",
+      parent_id: folder.parent_id == null ? "" : String(folder.parent_id),
+      sort_order: folder.sort_order == null ? "" : String(folder.sort_order),
+    });
+    setFolderDrawerOpen(true);
+  }
+
+  function closeFolderDrawer() {
+    setFolderDrawerOpen(false);
+    setEditingFolder(null);
+    setFolderForm(createDefaultFolderForm());
+  }
+
   function replaceTaskLocally(updatedTask) {
     setData((current) => ({
       ...current,
@@ -1063,6 +1158,7 @@ function AdminPage({ user, openAuth, refreshNav }) {
         next.documents = await request(`/admin/documents${toQuery(activePaging)}`);
         next.folders = await request(`/admin/folders${toQuery({ page: 1, page_size: 100 })}`);
       }
+      if (tab === "folders") next.folders = await request(`/admin/folders${toQuery(activePaging)}`);
       if (tab === "users") next.users = await request(`/admin/users${toQuery(activePaging)}`);
       if (tab === "comments") next.comments = await request(`/admin/comments${toQuery(activePaging)}`);
       if (tab === "orders") next.orders = await request(`/admin/orders${toQuery(activePaging)}`);
@@ -1138,28 +1234,57 @@ function AdminPage({ user, openAuth, refreshNav }) {
     });
   }
 
-  async function createFolder(event) {
+  async function submitDocument(event) {
     event.preventDefault();
     setError("");
-    await runBusy("admin-create-folder", async () => {
-      await request("/admin/folders", { method: "POST", body: JSON.stringify(folderForm) });
-      setFolderForm({ name: "" });
+    const isEditing = Boolean(editingDocument);
+    const busyKey = isEditing ? `admin-update-document-${editingDocument.id}` : "admin-create-document";
+    await runBusy(busyKey, async () => {
+      const payload = documentFormPayload(docForm);
+      if (isEditing) await request(`/admin/documents/${editingDocument.id}`, { method: "PUT", body: JSON.stringify(payload) });
+      else await request("/admin/documents", { method: "POST", body: JSON.stringify(payload) });
       await load();
       await refreshNav();
-      notify("文件夹已创建");
+      notify(isEditing ? "文档已保存" : "文档已创建");
+      closeDocumentDrawer();
     }).catch((err) => setError(err.message));
   }
 
-  async function createDocument(event) {
-    event.preventDefault();
+  async function deleteDocument(doc) {
+    if (!window.confirm(`确认删除文档“${doc.title}”？`)) return;
     setError("");
-    await runBusy("admin-create-document", async () => {
-      const payload = { ...docForm, folder_id: docForm.folder_id ? Number(docForm.folder_id) : null };
-      await request("/admin/documents", { method: "POST", body: JSON.stringify(payload) });
-      setDocForm({ title: "", content: "", folder_id: "", author: "生产力Mark" });
+    await runBusy(`admin-delete-document-${doc.id}`, async () => {
+      await request(`/admin/documents/${doc.id}`, { method: "DELETE" });
       await load();
       await refreshNav();
-      notify("文档已创建");
+      notify("文档已删除");
+    }).catch((err) => setError(err.message));
+  }
+
+  async function submitFolder(event) {
+    event.preventDefault();
+    setError("");
+    const isEditing = Boolean(editingFolder);
+    const busyKey = isEditing ? `admin-update-folder-${editingFolder.id}` : "admin-create-folder";
+    await runBusy(busyKey, async () => {
+      const payload = folderFormPayload(folderForm);
+      if (isEditing) await request(`/admin/folders/${editingFolder.id}`, { method: "PUT", body: JSON.stringify(payload) });
+      else await request("/admin/folders", { method: "POST", body: JSON.stringify(payload) });
+      await load();
+      await refreshNav();
+      notify(isEditing ? "文件夹已保存" : "文件夹已创建");
+      closeFolderDrawer();
+    }).catch((err) => setError(err.message));
+  }
+
+  async function deleteFolder(folder) {
+    if (!window.confirm(`确认删除文件夹“${folder.name}”？`)) return;
+    setError("");
+    await runBusy(`admin-delete-folder-${folder.id}`, async () => {
+      await request(`/admin/folders/${folder.id}`, { method: "DELETE" });
+      await load();
+      await refreshNav();
+      notify("文件夹已删除");
     }).catch((err) => setError(err.message));
   }
 
@@ -1210,7 +1335,7 @@ function AdminPage({ user, openAuth, refreshNav }) {
       <div className="admin-tabs">
         {[
           ["tasks", "任务管理"], ["home", "首页 Hero"], ["documents", "文档管理"], ["users", "用户管理"], ["comments", "评论管理"], ["orders", "订单管理"],
-        ].map(([key, label]) => <button key={key} className={tab === key ? "active" : ""} disabled={adminLoading} onClick={() => setTab(key)}>{label}</button>)}
+        ].map(([key, label]) => <button key={key} className={tab === key ? "active" : ""} disabled={adminLoading} onClick={() => switchAdminTab(key)}>{label}</button>)}
       </div>
       {error && <Notice type="error" message={error} />}
       {tab === "home" && <div className="panel admin-panel">
@@ -1234,14 +1359,25 @@ function AdminPage({ user, openAuth, refreshNav }) {
         <Pagination pageData={data.tasks} loading={adminLoading} onChange={(next) => updateAdminPaging("tasks", next)} />
       </div>}
       {tab === "documents" && <div className="panel admin-panel">
-        <div className="panel-head"><h2>文档和文件夹管理</h2></div>
-        <form className="inline-form" onSubmit={createFolder}><input placeholder="文件夹名称" value={folderForm.name} onChange={(event) => setFolderForm({ name: event.target.value })} /><button className="btn" disabled={busy("admin-create-folder")} aria-busy={busy("admin-create-folder")}>{loadingText(busy("admin-create-folder"), "创建文件夹", "创建中...")}</button></form>
-        <form className="form" onSubmit={createDocument}>
-          <div className="inline-form"><input placeholder="文档标题" value={docForm.title} onChange={(event) => setDocForm({ ...docForm, title: event.target.value })} /><select value={docForm.folder_id} onChange={(event) => setDocForm({ ...docForm, folder_id: event.target.value })}><option value="">根目录</option>{pageItems(data.folders).map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select><button className="btn primary" disabled={busy("admin-create-document")} aria-busy={busy("admin-create-document")}>{loadingText(busy("admin-create-document"), "创建文档", "创建中...")}</button></div>
-          <MarkdownEditor value={docForm.content} onChange={(content) => setDocForm({ ...docForm, content })} user={user} openAuth={openAuth} />
-        </form>
-        {adminLoading ? <div className="empty">加载中...</div> : <div className="admin-list">{pageItems(data.documents).map((doc) => <div key={doc.id} className="admin-row"><b>{doc.title}</b><span>{doc.author}</span><Link to={`/docs/${doc.id}`}>查看</Link></div>)}</div>}
+        <div className="panel-head">
+          <div><h2>文档管理</h2><p>维护文档内容、归属文件夹和展示顺序。</p></div>
+          <div className="row-actions">
+            <button className="btn primary" onClick={openCreateDocumentDrawer}>创建文档</button>
+            <Link className="btn" to="/admin/folders">文件夹管理</Link>
+          </div>
+        </div>
+        {adminLoading ? <div className="empty">加载中...</div> : <DocumentAdminTable documents={pageItems(data.documents)} folders={pageItems(data.folders)} openEdit={openEditDocumentDrawer} deleteDocument={deleteDocument} busy={busy} />}
         <Pagination pageData={data.documents} loading={adminLoading} onChange={(next) => updateAdminPaging("documents", next)} />
+      </div>}
+      {tab === "folders" && <div className="panel admin-panel">
+        <div className="panel-head">
+          <div><h2>文件夹管理</h2><p>创建、修改和删除文档文件夹。</p></div>
+          <div className="row-actions">
+            <button className="btn primary" onClick={openCreateFolderDrawer}>创建文件夹</button>
+            <Link className="btn" to="/admin/documents">返回文档管理</Link>
+          </div>
+        </div>
+        {adminLoading ? <div className="empty">加载中...</div> : <FolderAdminTable folders={pageItems(data.folders)} openEdit={openEditFolderDrawer} deleteFolder={deleteFolder} busy={busy} />}
       </div>}
       {tab === "users" && <div className="panel admin-panel"><div className="panel-head"><h2>用户管理</h2></div>{adminLoading ? <div className="empty">加载中...</div> : <div className="admin-list">{pageItems(data.users).map((item) => { const userBusy = busy(`admin-user-status-${item.id}`); return <div key={item.id} className="admin-row"><b>{item.nickname}</b><span>{item.email || item.phone}</span><span>{item.is_banned ? "已封禁" : "正常"}</span><button className="btn" disabled={userBusy} aria-busy={userBusy} onClick={() => updateUserStatus(item)}>{loadingText(userBusy, item.is_banned ? "解封" : "封禁", "处理中...")}</button></div>; })}</div>}<Pagination pageData={data.users} loading={adminLoading} onChange={(next) => updateAdminPaging("users", next)} /></div>}
       {tab === "comments" && <div className="panel admin-panel"><div className="panel-head"><h2>评论管理</h2></div>{adminLoading ? <div className="empty">加载中...</div> : <CommentAdminList comments={pageItems(data.comments)} action={commentAction} busy={busy} />}<Pagination pageData={data.comments} loading={adminLoading} onChange={(next) => updateAdminPaging("comments", next)} /></div>}
@@ -1260,7 +1396,86 @@ function AdminPage({ user, openAuth, refreshNav }) {
           <div className="drawer-actions"><button type="button" className="btn" onClick={closeTaskDrawer}>取消</button><button className="btn primary" disabled={busy(editingTask ? `admin-update-task-${editingTask.id}` : "admin-create-task")} aria-busy={busy(editingTask ? `admin-update-task-${editingTask.id}` : "admin-create-task")}>{loadingText(busy(editingTask ? `admin-update-task-${editingTask.id}` : "admin-create-task"), editingTask ? "保存任务" : "创建任务", editingTask ? "保存中..." : "创建中...")}</button></div>
         </form>
       </BottomDrawer>
+      <BottomDrawer title={editingDocument ? "编辑文档" : "创建文档"} open={documentDrawerOpen} height={documentDrawerHeight} setHeight={setDocumentDrawerHeight} close={closeDocumentDrawer}>
+        <form className="form drawer-form" onSubmit={submitDocument}>
+          <div className="inline-form drawer-inline">
+            <input placeholder="文档标题" value={docForm.title} onChange={(event) => setDocForm({ ...docForm, title: event.target.value })} />
+            <select value={docForm.folder_id} onChange={(event) => setDocForm({ ...docForm, folder_id: event.target.value })}>
+              <option value="">根目录</option>
+              {pageItems(data.folders).map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
+            </select>
+          </div>
+          <MarkdownEditor value={docForm.content} onChange={(content) => setDocForm({ ...docForm, content })} user={user} openAuth={openAuth} fill />
+          <div className="drawer-actions"><button type="button" className="btn" onClick={closeDocumentDrawer}>取消</button><button className="btn primary" disabled={busy(editingDocument ? `admin-update-document-${editingDocument.id}` : "admin-create-document") || !docForm.title.trim() || !docForm.content.trim()} aria-busy={busy(editingDocument ? `admin-update-document-${editingDocument.id}` : "admin-create-document")}>{loadingText(busy(editingDocument ? `admin-update-document-${editingDocument.id}` : "admin-create-document"), editingDocument ? "保存文档" : "创建文档", editingDocument ? "保存中..." : "创建中...")}</button></div>
+        </form>
+      </BottomDrawer>
+      <BottomDrawer title={editingFolder ? "编辑文件夹" : "创建文件夹"} open={folderDrawerOpen} height={folderDrawerHeight} setHeight={setFolderDrawerHeight} close={closeFolderDrawer}>
+        <form className="form drawer-form" onSubmit={submitFolder}>
+          <div className="inline-form drawer-inline">
+            <input placeholder="文件夹名称" value={folderForm.name} onChange={(event) => setFolderForm({ ...folderForm, name: event.target.value })} />
+            <select value={folderForm.parent_id} onChange={(event) => setFolderForm({ ...folderForm, parent_id: event.target.value })}>
+              <option value="">根目录</option>
+              {pageItems(data.folders).filter((folder) => folder.id !== editingFolder?.id).map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
+            </select>
+            <input type="number" placeholder="排序值（留空自动）" value={folderForm.sort_order} onChange={(event) => setFolderForm({ ...folderForm, sort_order: event.target.value })} />
+          </div>
+          <div className="drawer-actions"><button type="button" className="btn" onClick={closeFolderDrawer}>取消</button><button className="btn primary" disabled={busy(editingFolder ? `admin-update-folder-${editingFolder.id}` : "admin-create-folder") || !folderForm.name.trim()} aria-busy={busy(editingFolder ? `admin-update-folder-${editingFolder.id}` : "admin-create-folder")}>{loadingText(busy(editingFolder ? `admin-update-folder-${editingFolder.id}` : "admin-create-folder"), editingFolder ? "保存文件夹" : "创建文件夹", editingFolder ? "保存中..." : "创建中...")}</button></div>
+        </form>
+      </BottomDrawer>
     </section>
+  );
+}
+
+function DocumentAdminTable({ documents, folders, openEdit, deleteDocument, busy }) {
+  if (!documents.length) return <div className="empty">暂无文档</div>;
+  const folderMap = new Map(folders.map((folder) => [folder.id, folder.name]));
+  return (
+    <div className="table-scroll">
+      <table className="admin-table">
+        <thead><tr><th>所在文件夹</th><th>标题</th><th>创建时间</th><th>修改时间</th><th>操作</th></tr></thead>
+        <tbody>
+          {documents.map((doc) => {
+            const deleteBusy = busy(`admin-delete-document-${doc.id}`);
+            return (
+              <tr key={doc.id}>
+                <td>{doc.folder_id ? folderMap.get(doc.folder_id) || "未知文件夹" : "根目录"}</td>
+                <td><b>{doc.title}</b></td>
+                <td>{formatDate(doc.created_at)}</td>
+                <td>{formatDate(doc.updated_at)}</td>
+                <td><div className="table-actions"><Link className="link-btn" to={`/docs/${doc.id}`}>查看</Link><button className="link-btn" onClick={() => openEdit(doc)}>修改</button><button className="link-btn danger" disabled={deleteBusy} aria-busy={deleteBusy} onClick={() => deleteDocument(doc)}>{loadingText(deleteBusy, "删除", "处理中...")}</button></div></td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function FolderAdminTable({ folders, openEdit, deleteFolder, busy }) {
+  if (!folders.length) return <div className="empty">暂无文件夹</div>;
+  const folderMap = new Map(folders.map((folder) => [folder.id, folder.name]));
+  return (
+    <div className="table-scroll">
+      <table className="admin-table">
+        <thead><tr><th>文件夹名称</th><th>上级文件夹</th><th>排序</th><th>创建时间</th><th>修改时间</th><th>操作</th></tr></thead>
+        <tbody>
+          {folders.map((folder) => {
+            const deleteBusy = busy(`admin-delete-folder-${folder.id}`);
+            return (
+              <tr key={folder.id}>
+                <td><b>{folder.name}</b></td>
+                <td>{folder.parent_id ? folderMap.get(folder.parent_id) || "未知文件夹" : "根目录"}</td>
+                <td>{folder.sort_order}</td>
+                <td>{formatDate(folder.created_at)}</td>
+                <td>{formatDate(folder.updated_at)}</td>
+                <td><div className="table-actions"><button className="link-btn" onClick={() => openEdit(folder)}>修改</button><button className="link-btn danger" disabled={deleteBusy} aria-busy={deleteBusy} onClick={() => deleteFolder(folder)}>{loadingText(deleteBusy, "删除", "处理中...")}</button></div></td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 }
 

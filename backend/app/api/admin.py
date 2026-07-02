@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.api.documents import serialize_document
 from app.api.utils import next_sort_order, page_payload, paginate_query, serialize_task, serialize_task_with_metrics, task_metrics_query
 from app.dependencies import get_current_admin, get_db
-from app.models import Document, DocumentComment, DocumentFolder, GitHubSyncStatus, PaymentStatus, SponsorOrder, Task, TaskComment, TaskSource, TaskStatus, User, UserRole
+from app.models import Document, DocumentComment, DocumentFolder, GitHubSyncStatus, Like, LikeTarget, PaymentStatus, SponsorOrder, Task, TaskComment, TaskSource, TaskStatus, User, UserRole
 from app.schemas import AdminCommentOut, CommentAdminUpdate, CommentCreate, DocumentCreate, DocumentOut, DocumentUpdate, FolderCreate, FolderOut, FolderUpdate, GitHubSyncSummary, HomeHeroOut, HomeHeroUpdate, Page, ReorderItem, SponsorOrderOut, TaskCommentOut, TaskCreateAdmin, TaskOut, TaskUpdateAdmin, UserOut
 from app.services.github_sync import GitHubSyncError, delete_comment_from_github_background, sync_comment_to_github_background, sync_historical_issues, sync_task_to_github_background
 from app.services.home_hero import get_home_hero, save_home_hero
@@ -211,8 +211,25 @@ def admin_list_folders(
     return page_payload(items, total, page, page_size)
 
 
+def validate_folder_parent(db: Session, folder_id: int | None, parent_id: int | None) -> None:
+    if parent_id is None:
+        return
+    if folder_id is not None and parent_id == folder_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="上级文件夹不能选择自身")
+    parent = db.get(DocumentFolder, parent_id)
+    if not parent:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="上级文件夹不存在")
+    while folder_id is not None and parent.parent_id is not None:
+        if parent.parent_id == folder_id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="上级文件夹不能选择子文件夹")
+        parent = db.get(DocumentFolder, parent.parent_id)
+        if not parent:
+            return
+
+
 @router.post("/folders", response_model=FolderOut)
 def admin_create_folder(payload: FolderCreate, db: Session = Depends(get_db)) -> DocumentFolder:
+    validate_folder_parent(db, None, payload.parent_id)
     folder = DocumentFolder(name=payload.name, parent_id=payload.parent_id, sort_order=payload.sort_order or next_sort_order(db, DocumentFolder))
     db.add(folder)
     db.commit()
@@ -225,6 +242,8 @@ def admin_update_folder(folder_id: int, payload: FolderUpdate, db: Session = Dep
     folder = db.get(DocumentFolder, folder_id)
     if not folder:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文件夹不存在")
+    if "parent_id" in payload.model_fields_set:
+        validate_folder_parent(db, folder_id, payload.parent_id)
     for key, value in payload.model_dump(exclude_unset=True).items():
         setattr(folder, key, value)
     db.commit()
@@ -237,6 +256,10 @@ def admin_delete_folder(folder_id: int, db: Session = Depends(get_db)) -> dict[s
     folder = db.get(DocumentFolder, folder_id)
     if not folder:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文件夹不存在")
+    if db.query(DocumentFolder.id).filter(DocumentFolder.parent_id == folder_id).first():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请先删除或移动子文件夹")
+    if db.query(Document.id).filter(Document.folder_id == folder_id).first():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请先删除或移动该文件夹下的文档")
     db.delete(folder)
     db.commit()
     return {"message": "文件夹已删除"}
@@ -284,6 +307,9 @@ def admin_delete_document(document_id: int, db: Session = Depends(get_db)) -> di
     doc = db.get(Document, document_id)
     if not doc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文档不存在")
+    db.query(DocumentComment).filter(DocumentComment.document_id == document_id).update({DocumentComment.parent_id: None}, synchronize_session=False)
+    db.query(DocumentComment).filter(DocumentComment.document_id == document_id).delete(synchronize_session=False)
+    db.query(Like).filter(Like.target_type == LikeTarget.document.value, Like.target_id == document_id).delete(synchronize_session=False)
     db.delete(doc)
     db.commit()
     return {"message": "文档已删除"}
