@@ -73,7 +73,7 @@ function createDefaultTaskForm() {
 }
 
 function createDefaultDocumentForm() {
-  return { title: "", content: "", folder_id: "" };
+  return { title: "", content: "", folder_id: "", sort_order: "" };
 }
 
 function createDefaultFolderForm() {
@@ -92,11 +92,13 @@ function taskFormPayload(form) {
 }
 
 function documentFormPayload(form) {
-  return {
+  const payload = {
     title: form.title,
     content: form.content,
     folder_id: form.folder_id ? Number(form.folder_id) : null,
   };
+  if (form.sort_order !== "") payload.sort_order = Number(form.sort_order);
+  return payload;
 }
 
 function folderFormPayload(form) {
@@ -1361,6 +1363,7 @@ function AdminPage({ user, openAuth, refreshNav }) {
       title: doc.title || "",
       content: doc.content || "",
       folder_id: doc.folder_id == null ? "" : String(doc.folder_id),
+      sort_order: doc.sort_order == null ? "" : String(doc.sort_order),
     });
     setDocumentDrawerOpen(true);
   }
@@ -1678,6 +1681,7 @@ function AdminPage({ user, openAuth, refreshNav }) {
               <option value="">根目录</option>
               {pageItems(data.folders).map((folder) => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
             </select>
+            <input type="number" placeholder="排序值（留空自动）" value={docForm.sort_order} onChange={(event) => setDocForm({ ...docForm, sort_order: event.target.value })} />
           </div>
           <MarkdownEditor value={docForm.content} onChange={(content) => setDocForm({ ...docForm, content })} user={user} openAuth={openAuth} fill />
           <div className="drawer-actions"><button type="button" className="btn" onClick={closeDocumentDrawer}>取消</button><button className="btn primary" disabled={busy(editingDocument ? `admin-update-document-${editingDocument.id}` : "admin-create-document") || !docForm.title.trim() || !docForm.content.trim()} aria-busy={busy(editingDocument ? `admin-update-document-${editingDocument.id}` : "admin-create-document")}>{loadingText(busy(editingDocument ? `admin-update-document-${editingDocument.id}` : "admin-create-document"), editingDocument ? "保存文档" : "创建文档", editingDocument ? "保存中..." : "创建中...")}</button></div>

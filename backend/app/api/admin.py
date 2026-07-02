@@ -271,7 +271,7 @@ def admin_list_documents(
     page_size: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db),
 ) -> Page[DocumentOut]:
-    docs, total, page, page_size = paginate_query(db.query(Document).order_by(Document.sort_order.asc()), page, page_size)
+    docs, total, page, page_size = paginate_query(db.query(Document).order_by(Document.folder_id.asc(), Document.sort_order.asc(), Document.id.asc()), page, page_size)
     return page_payload([serialize_document(db, item) for item in docs], total, page, page_size)
 
 
@@ -282,7 +282,7 @@ def admin_create_document(payload: DocumentCreate, db: Session = Depends(get_db)
         content=payload.content,
         folder_id=payload.folder_id,
         author=payload.author,
-        sort_order=payload.sort_order or next_sort_order(db, Document, "folder_id", payload.folder_id),
+        sort_order=payload.sort_order if payload.sort_order is not None else next_sort_order(db, Document, "folder_id", payload.folder_id),
     )
     db.add(doc)
     db.commit()
@@ -295,7 +295,13 @@ def admin_update_document(document_id: int, payload: DocumentUpdate, db: Session
     doc = db.get(Document, document_id)
     if not doc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文档不存在")
-    for key, value in payload.model_dump(exclude_unset=True).items():
+    data = payload.model_dump(exclude_unset=True)
+    sort_order_requested = "sort_order" in data and data["sort_order"] is not None
+    if "sort_order" in data and data["sort_order"] is None:
+        data.pop("sort_order")
+    if "folder_id" in data and data["folder_id"] != doc.folder_id and not sort_order_requested:
+        data["sort_order"] = next_sort_order(db, Document, "folder_id", data["folder_id"])
+    for key, value in data.items():
         setattr(doc, key, value)
     db.commit()
     db.refresh(doc)

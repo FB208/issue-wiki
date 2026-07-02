@@ -62,7 +62,7 @@ def serialize_document_comment(item: DocumentComment) -> DocumentCommentOut:
 @router.get("/navigation")
 def navigation(db: Session = Depends(get_db)) -> dict:
     folders = db.query(DocumentFolder).order_by(DocumentFolder.sort_order.asc()).all()
-    docs = db.query(Document).order_by(Document.sort_order.asc()).all()
+    docs = db.query(Document).order_by(Document.folder_id.asc(), Document.sort_order.asc(), Document.id.asc()).all()
     return {
         "home": {"title": "赞助功能", "path": "/"},
         "folders": [FolderOut.model_validate(item) for item in folders],
@@ -80,7 +80,7 @@ def list_documents(
     query = db.query(Document)
     if folder_id is not None:
         query = query.filter(Document.folder_id == folder_id)
-    docs, total, page, page_size = paginate_query(query.order_by(Document.sort_order.asc()), page, page_size)
+    docs, total, page, page_size = paginate_query(query.order_by(Document.folder_id.asc(), Document.sort_order.asc(), Document.id.asc()), page, page_size)
     return page_payload([serialize_document(db, item) for item in docs], total, page, page_size)
 
 
