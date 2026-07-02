@@ -982,6 +982,15 @@ td small {
   line-height: 1.85;
 }
 
+.markdown-body img,
+.comment-markdown img,
+.wmde-markdown img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  border-radius: 12px;
+}
+
 .markdown-body pre, .wmde-markdown pre {
   overflow: auto;
   border-radius: 12px;
