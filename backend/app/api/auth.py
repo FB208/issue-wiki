@@ -7,7 +7,7 @@ from app.core.config import settings
 from app.core.security import create_access_token, get_password_hash, verify_password
 from app.dependencies import get_current_user, get_db, get_redis
 from app.models import User, UserRole
-from app.schemas import LoginRequest, RegisterRequest, ResetPasswordRequest, SendCodeRequest, TokenOut, UserOut
+from app.schemas import LoginRequest, PasswordUpdate, RegisterRequest, ResetPasswordRequest, SendCodeRequest, TokenOut, UserOut, UserProfileUpdate
 from app.services.notification import enforce_send_limit, generate_code, send_verification_code, store_code, verify_code
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -84,6 +84,26 @@ def reset_password(payload: ResetPasswordRequest, db: Session = Depends(get_db),
 @router.get("/me", response_model=UserOut)
 def me(user: User = Depends(get_current_user)) -> User:
     return user
+
+
+@router.patch("/me", response_model=UserOut)
+def update_me(payload: UserProfileUpdate, user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> User:
+    if "nickname" in payload.model_fields_set and payload.nickname is not None:
+        user.nickname = payload.nickname
+    if "avatar_url" in payload.model_fields_set:
+        user.avatar_url = payload.avatar_url
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+@router.patch("/password")
+def update_password(payload: PasswordUpdate, user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> dict[str, str]:
+    if not verify_password(payload.current_password, user.password_hash):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="当前密码错误")
+    user.password_hash = get_password_hash(payload.new_password)
+    db.commit()
+    return {"message": "密码已更新"}
 
 
 def ensure_admin_user(db: Session) -> None:

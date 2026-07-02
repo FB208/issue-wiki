@@ -2,13 +2,13 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from fastapi.responses import PlainTextResponse
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.dependencies import get_current_user_optional, get_db
 from app.models import PaymentChannel, PaymentStatus, SponsorOrder, User
-from app.schemas import PaymentConfigOut, PaymentSummaryOut, SponsorCreate, SponsorIntentOut, SponsorOrderOut
+from app.schemas import PaymentConfigOut, PaymentSummaryOut, SponsorCreate, SponsorIntentOut, SponsorOrderOut, SponsorRankingItemOut
 from app.services.payment import (
     PaymentConfigError,
     PaymentProviderError,
@@ -42,6 +42,41 @@ def payment_summary(db: Session = Depends(get_db)) -> PaymentSummaryOut:
         SponsorOrder.status == PaymentStatus.paid.value,
     ).scalar()
     return PaymentSummaryOut(paid_amount=paid_amount or 0)
+
+
+@router.get("/ranking", response_model=list[SponsorRankingItemOut])
+def payment_ranking(db: Session = Depends(get_db)) -> list[SponsorRankingItemOut]:
+    amount_sum = func.coalesce(func.sum(SponsorOrder.amount), 0).label("amount")
+    rows = (
+        db.query(SponsorOrder.user_id, User.nickname, User.avatar_url, amount_sum)
+        .join(User, User.id == SponsorOrder.user_id)
+        .filter(
+            SponsorOrder.status == PaymentStatus.paid.value,
+            SponsorOrder.user_id.isnot(None),
+            SponsorOrder.is_guest.is_(False),
+        )
+        .group_by(SponsorOrder.user_id, User.nickname, User.avatar_url)
+        .order_by(amount_sum.desc())
+        .all()
+    )
+    items = [
+        SponsorRankingItemOut(
+            user_id=user_id,
+            nickname=nickname,
+            avatar_url=avatar_url,
+            amount=amount,
+            is_guest=False,
+        )
+        for user_id, nickname, avatar_url, amount in rows
+    ]
+
+    guest_amount = db.query(func.coalesce(func.sum(SponsorOrder.amount), 0)).filter(
+        SponsorOrder.status == PaymentStatus.paid.value,
+        or_(SponsorOrder.user_id.is_(None), SponsorOrder.is_guest.is_(True)),
+    ).scalar()
+    if guest_amount:
+        items.append(SponsorRankingItemOut(user_id=None, nickname="游客赞助", avatar_url=None, amount=guest_amount, is_guest=True))
+    return items
 
 
 @router.get("/orders/{merchant_order_no}", response_model=SponsorOrderOut)

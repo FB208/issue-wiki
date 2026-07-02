@@ -68,6 +68,34 @@ class ResetPasswordRequest(BaseModel):
     new_password: str = Field(min_length=8, max_length=128)
 
 
+class UserProfileUpdate(BaseModel):
+    nickname: str | None = Field(default=None, min_length=1, max_length=80)
+    avatar_url: str | None = Field(default=None, max_length=1000)
+
+    @field_validator("nickname")
+    @classmethod
+    def strip_nickname(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        value = value.strip()
+        if not value:
+            raise ValueError("昵称不能为空")
+        return value
+
+    @field_validator("avatar_url")
+    @classmethod
+    def strip_avatar_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        value = value.strip()
+        return value or None
+
+
+class PasswordUpdate(BaseModel):
+    current_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=8, max_length=128)
+
+
 class TaskBase(BaseModel):
     name: str = Field(min_length=1, max_length=180)
     description: str = Field(min_length=1)
@@ -150,6 +178,14 @@ class PaymentConfigOut(BaseModel):
 
 class PaymentSummaryOut(BaseModel):
     paid_amount: Decimal
+
+
+class SponsorRankingItemOut(BaseModel):
+    user_id: int | None
+    nickname: str
+    avatar_url: str | None = None
+    amount: Decimal
+    is_guest: bool = False
 
 
 class SponsorCreate(BaseModel):

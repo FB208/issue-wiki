@@ -40,6 +40,21 @@ const defaultPageParams = { page: 1, page_size: 20 };
 const pageSizeOptions = [10, 20, 50];
 const defaultSponsorAmount = "100";
 const sponsorAmountOptions = ["10", "50", "100", "1000"];
+const avatarColors = ["#2563eb", "#059669", "#7c3aed", "#db2777", "#ea580c", "#0891b2", "#4f46e5", "#16a34a"];
+
+function avatarInitial(nickname) {
+  const text = String(nickname || "用户").trim();
+  return Array.from(text)[0] || "用";
+}
+
+function avatarColor(user) {
+  const source = `${user?.id || ""}:${user?.nickname || "用户"}`;
+  let hash = 0;
+  for (let index = 0; index < source.length; index += 1) {
+    hash = ((hash << 5) - hash + source.charCodeAt(index)) | 0;
+  }
+  return avatarColors[Math.abs(hash) % avatarColors.length];
+}
 
 function createDefaultAdminTaskFilters() {
   return {
@@ -217,6 +232,7 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [nav, setNav] = useState({ folders: [], documents: [] });
   const [paymentSummary, setPaymentSummary] = useState({ paid_amount: "0" });
+  const [sponsorRanking, setSponsorRanking] = useState([]);
   const [authOpen, setAuthOpen] = useState(false);
   const [authorTipOpen, setAuthorTipOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -246,10 +262,23 @@ export default function App() {
     }
   }
 
+  async function loadSponsorRanking() {
+    try {
+      setSponsorRanking(await request("/payments/ranking"));
+    } catch {
+      setSponsorRanking([]);
+    }
+  }
+
+  async function refreshSponsorData() {
+    await Promise.all([loadPaymentSummary(), loadSponsorRanking()]);
+  }
+
   useEffect(() => {
     loadUser();
     loadNavigation();
     loadPaymentSummary();
+    loadSponsorRanking();
   }, []);
 
   function logout() {
@@ -261,17 +290,18 @@ export default function App() {
     <ToastProvider>
       <Layout nav={nav} user={user} logout={logout} openAuth={() => setAuthOpen(true)} openAuthorTip={() => setAuthorTipOpen(true)} mobileOpen={mobileOpen} setMobileOpen={setMobileOpen}>
         <Routes>
-          <Route path="/" element={<HomePage user={user} openAuth={() => setAuthOpen(true)} paidAmount={paymentSummary.paid_amount} refreshPaymentSummary={loadPaymentSummary} />} />
+          <Route path="/" element={<HomePage user={user} openAuth={() => setAuthOpen(true)} paidAmount={paymentSummary.paid_amount} sponsorRanking={sponsorRanking} refreshPaymentSummary={refreshSponsorData} />} />
           <Route path="/tasks/:taskId" element={<TaskDetailPage user={user} openAuth={() => setAuthOpen(true)} />} />
           <Route path="/docs" element={<DocumentsPage nav={nav} user={user} openAuth={() => setAuthOpen(true)} />} />
           <Route path="/docs/:documentId" element={<DocumentsPage nav={nav} user={user} openAuth={() => setAuthOpen(true)} />} />
           <Route path="/mine/tasks" element={<MinePage type="tasks" user={user} openAuth={() => setAuthOpen(true)} />} />
           <Route path="/mine/orders" element={<MinePage type="orders" user={user} openAuth={() => setAuthOpen(true)} />} />
+          <Route path="/settings" element={<SettingsPage user={user} openAuth={() => setAuthOpen(true)} onUserUpdated={setUser} />} />
           <Route path="/admin/*" element={<AdminPage user={user} openAuth={() => setAuthOpen(true)} refreshNav={loadNavigation} />} />
         </Routes>
       </Layout>
       {authOpen && <AuthModal close={() => setAuthOpen(false)} onAuthed={loadUser} />}
-      {authorTipOpen && <SponsorModal close={() => setAuthorTipOpen(false)} onDone={loadPaymentSummary} />}
+      {authorTipOpen && <SponsorModal close={() => setAuthorTipOpen(false)} onDone={refreshSponsorData} />}
     </ToastProvider>
   );
 }
@@ -304,7 +334,7 @@ function Layout({ children, nav, user, logout, openAuth, openAuthorTip, mobileOp
       <main className="main">
         <header className="topbar">
           <div className="top-actions">
-            {user ? <span className="user-chip">{user.nickname}</span> : <button className="btn" onClick={openAuth}>登录</button>}
+            {user ? <Link className="user-chip" to="/settings"><UserAvatar user={user} size="sm" /><span>{user.nickname}</span></Link> : <button className="btn" onClick={openAuth}>登录</button>}
             {user ? <button className="btn ghost" onClick={logout}>退出</button> : null}
             <button className="btn primary" onClick={openAuthorTip}>打赏作者</button>
           </div>
@@ -312,6 +342,16 @@ function Layout({ children, nav, user, logout, openAuth, openAuthorTip, mobileOp
         {children}
       </main>
     </div>
+  );
+}
+
+function UserAvatar({ user, size = "md" }) {
+  const avatarUrl = user?.avatar_url || "";
+  const nickname = user?.nickname || "用户";
+  return (
+    <span className={`avatar avatar-${size}`} style={{ "--avatar-bg": avatarColor(user) }} aria-hidden="true">
+      {avatarUrl ? <img src={avatarUrl} alt="" /> : <span>{avatarInitial(nickname)}</span>}
+    </span>
   );
 }
 
@@ -414,7 +454,7 @@ function DocumentTreeNav({ nav }) {
   );
 }
 
-function HomePage({ user, openAuth, paidAmount, refreshPaymentSummary }) {
+function HomePage({ user, openAuth, paidAmount, sponsorRanking, refreshPaymentSummary }) {
   const [tasksPage, setTasksPage] = useState(() => emptyPage());
   const [pagination, setPagination] = useState(defaultPageParams);
   const [heroContent, setHeroContent] = useState("");
@@ -470,10 +510,13 @@ function HomePage({ user, openAuth, paidAmount, refreshPaymentSummary }) {
         <div className="hero-content">
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{heroContent}</ReactMarkdown>
         </div>
-        <div className="summary-grid">
-          <Metric title="公开任务" value={tasksPage.total} />
-          <Metric title="已赞助" value={`¥${totalSponsored.toFixed(2)}`} />
-          <Metric title="共创人数" value={coCreators} />
+        <div className="hero-side">
+          <div className="summary-grid">
+            <Metric title="公开任务" value={tasksPage.total} />
+            <Metric title="已赞助" value={formatMoney(totalSponsored)} />
+            <Metric title="共创人数" value={coCreators} />
+          </div>
+          <SponsorRanking items={sponsorRanking} />
         </div>
       </section>
 
@@ -523,6 +566,32 @@ function HomePage({ user, openAuth, paidAmount, refreshPaymentSummary }) {
 
 function Metric({ title, value }) {
   return <div className="metric"><span>{title}</span><b>{value}</b></div>;
+}
+
+function SponsorRanking({ items }) {
+  const ranking = Array.isArray(items) ? items : [];
+  return (
+    <div className="sponsor-ranking">
+      <div className="sponsor-ranking-head">
+        <h3>赞助排行</h3>
+        <span>按赞助金额排序</span>
+      </div>
+      {!ranking.length ? <div className="sponsor-ranking-empty">暂无赞助记录</div> : (
+        <div className="sponsor-ranking-list">
+          {ranking.map((item, index) => {
+            const user = { id: item.user_id ?? "guest", nickname: item.nickname, avatar_url: item.avatar_url };
+            return (
+              <div key={item.is_guest ? "guest" : item.user_id} className={`sponsor-ranking-item${item.is_guest ? " guest" : ""}`}>
+                <span className="sponsor-rank">{item.is_guest ? "游客" : index + 1}</span>
+                <div className="sponsor-ranking-user"><UserAvatar user={user} size="sm" /><span>{item.nickname}</span></div>
+                <b>{formatMoney(item.amount)}</b>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function TaskTable({ tasks, onSponsor, startIndex = 0 }) {
@@ -1049,6 +1118,105 @@ function MinePage({ type, user, openAuth }) {
       <div className="panel-head"><h2>{type === "tasks" ? "我的需求" : "我的赞助"}</h2></div>
       {loading ? <div className="empty">加载中...</div> : type === "tasks" ? <TaskTable tasks={pageItems(itemsPage)} startIndex={(itemsPage.page - 1) * itemsPage.page_size} onSponsor={() => {}} /> : <OrderList orders={pageItems(itemsPage)} />}
       <Pagination pageData={itemsPage} loading={loading} onChange={(next) => setPagination((current) => ({ ...current, ...next }))} />
+    </section>
+  );
+}
+
+function SettingsPage({ user, openAuth, onUserUpdated }) {
+  const [profile, setProfile] = useState({ nickname: user?.nickname || "", avatar_url: user?.avatar_url || "" });
+  const [avatarFile, setAvatarFile] = useState(null);
+  const [avatarPreview, setAvatarPreview] = useState("");
+  const [profileError, setProfileError] = useState("");
+  const [passwordForm, setPasswordForm] = useState({ current_password: "", new_password: "", confirm_password: "" });
+  const [passwordError, setPasswordError] = useState("");
+  const notify = useToast();
+  const { busy, runBusy } = useBusyActions();
+  const profileSaving = busy("settings-profile");
+  const passwordSaving = busy("settings-password");
+
+  useEffect(() => {
+    if (!user) return;
+    setProfile({ nickname: user.nickname || "", avatar_url: user.avatar_url || "" });
+  }, [user?.id, user?.nickname, user?.avatar_url]);
+
+  useEffect(() => {
+    if (!avatarFile) {
+      setAvatarPreview("");
+      return undefined;
+    }
+    const previewUrl = URL.createObjectURL(avatarFile);
+    setAvatarPreview(previewUrl);
+    return () => URL.revokeObjectURL(previewUrl);
+  }, [avatarFile]);
+
+  if (!user) return <Gate openAuth={openAuth} />;
+
+  async function saveProfile(event) {
+    event.preventDefault();
+    setProfileError("");
+    await runBusy("settings-profile", async () => {
+      let avatarUrl = profile.avatar_url || null;
+      if (avatarFile) {
+        const uploaded = await uploadFile(avatarFile);
+        avatarUrl = uploaded.url;
+      }
+      const updated = await request("/auth/me", { method: "PATCH", body: JSON.stringify({ nickname: profile.nickname, avatar_url: avatarUrl }) });
+      onUserUpdated(updated);
+      setProfile({ nickname: updated.nickname || "", avatar_url: updated.avatar_url || "" });
+      setAvatarFile(null);
+      notify("资料已更新");
+    }).catch((err) => setProfileError(err.message));
+  }
+
+  async function savePassword(event) {
+    event.preventDefault();
+    setPasswordError("");
+    if (passwordForm.new_password !== passwordForm.confirm_password) {
+      setPasswordError("两次输入的新密码不一致");
+      return;
+    }
+    await runBusy("settings-password", async () => {
+      await request("/auth/password", { method: "PATCH", body: JSON.stringify({ current_password: passwordForm.current_password, new_password: passwordForm.new_password }) });
+      setPasswordForm({ current_password: "", new_password: "", confirm_password: "" });
+      notify("密码已更新");
+    }).catch((err) => setPasswordError(err.message));
+  }
+
+  const previewUser = { ...user, nickname: profile.nickname || user.nickname, avatar_url: avatarPreview || profile.avatar_url };
+
+  return (
+    <section className="panel settings-page">
+      <div className="panel-head">
+        <div>
+          <h2>账号设置</h2>
+          <p>修改头像、昵称和密码。</p>
+        </div>
+      </div>
+      <div className="settings-grid">
+        <form className="form settings-card" onSubmit={saveProfile}>
+          <h3>个人资料</h3>
+          <div className="avatar-editor">
+            <UserAvatar user={previewUser} size="lg" />
+            <div>
+              <label className={`btn ${profileSaving ? "disabled" : ""}`}>选择头像<input type="file" accept="image/*" disabled={profileSaving} onChange={(event) => setAvatarFile(event.target.files?.[0] || null)} /></label>
+              <button type="button" className="btn ghost" disabled={profileSaving} onClick={() => { setAvatarFile(null); setProfile((current) => ({ ...current, avatar_url: "" })); }}>移除头像</button>
+              <p className="muted">不上传头像时，将显示昵称第一个字。</p>
+            </div>
+          </div>
+          <input placeholder="昵称" value={profile.nickname} onChange={(event) => setProfile({ ...profile, nickname: event.target.value })} />
+          {profileError && <Notice type="error" message={profileError} />}
+          <button className="btn primary" disabled={profileSaving} aria-busy={profileSaving}>{loadingText(profileSaving, "保存资料", "保存中...")}</button>
+        </form>
+
+        <form className="form settings-card" onSubmit={savePassword}>
+          <h3>修改密码</h3>
+          <input type="password" autoComplete="current-password" placeholder="当前密码" value={passwordForm.current_password} onChange={(event) => setPasswordForm({ ...passwordForm, current_password: event.target.value })} />
+          <input type="password" autoComplete="new-password" placeholder="新密码，至少 8 位" value={passwordForm.new_password} onChange={(event) => setPasswordForm({ ...passwordForm, new_password: event.target.value })} />
+          <input type="password" autoComplete="new-password" placeholder="再次输入新密码" value={passwordForm.confirm_password} onChange={(event) => setPasswordForm({ ...passwordForm, confirm_password: event.target.value })} />
+          {passwordError && <Notice type="error" message={passwordError} />}
+          <button className="btn primary" disabled={passwordSaving} aria-busy={passwordSaving}>{loadingText(passwordSaving, "更新密码", "更新中...")}</button>
+        </form>
+      </div>
     </section>
   );
 }
@@ -2035,11 +2203,23 @@ function MarkdownEditor({ value, onChange, user, openAuth, compact = false, fill
 function AuthModal({ close, onAuthed }) {
   const [mode, setMode] = useState("login");
   const [form, setForm] = useState({ account: "", password: "", nickname: "", code: "", new_password: "" });
+  const [avatarFile, setAvatarFile] = useState(null);
+  const [avatarPreview, setAvatarPreview] = useState("");
   const [error, setError] = useState("");
   const notify = useToast();
   const { busy, runBusy } = useBusyActions();
   const authSubmitting = busy("auth-submit");
   const codeSending = busy(`auth-code-${mode}`);
+
+  useEffect(() => {
+    if (!avatarFile) {
+      setAvatarPreview("");
+      return undefined;
+    }
+    const previewUrl = URL.createObjectURL(avatarFile);
+    setAvatarPreview(previewUrl);
+    return () => URL.revokeObjectURL(previewUrl);
+  }, [avatarFile]);
 
   async function sendCode(purpose) {
     setError("");
@@ -2061,6 +2241,14 @@ function AuthModal({ close, onAuthed }) {
         const payload = form.account.includes("@") ? { email: form.account } : { phone: form.account };
         const result = await request("/auth/register", { method: "POST", body: JSON.stringify({ ...payload, nickname: form.nickname, password: form.password, code: form.code }) });
         setToken(result.access_token);
+        if (avatarFile) {
+          try {
+            const uploaded = await uploadFile(avatarFile);
+            await request("/auth/me", { method: "PATCH", body: JSON.stringify({ avatar_url: uploaded.url }) });
+          } catch {
+            notify("注册成功，头像上传失败，可稍后在设置页修改", "error");
+          }
+        }
       }
       if (mode === "reset") {
         await request("/auth/reset-password", { method: "POST", body: JSON.stringify({ account: form.account, code: form.code, new_password: form.new_password }) });
@@ -2074,12 +2262,23 @@ function AuthModal({ close, onAuthed }) {
     }).catch((err) => setError(err.message));
   }
 
+  const registerPreviewUser = { nickname: form.nickname || "用户", avatar_url: avatarPreview };
+
   return (
     <Modal title={mode === "login" ? "登录" : mode === "register" ? "注册" : "忘记密码"} close={close}>
       <div className="auth-tabs"><button className={mode === "login" ? "active" : ""} onClick={() => setMode("login")}>登录</button><button className={mode === "register" ? "active" : ""} onClick={() => setMode("register")}>注册</button><button className={mode === "reset" ? "active" : ""} onClick={() => setMode("reset")}>忘记密码</button></div>
       <form className="form" onSubmit={submit}>
         <input placeholder="邮箱或手机号" value={form.account} onChange={(event) => setForm({ ...form, account: event.target.value })} />
         {mode === "register" && <input placeholder="昵称" value={form.nickname} onChange={(event) => setForm({ ...form, nickname: event.target.value })} />}
+        {mode === "register" && (
+          <div className="avatar-field">
+            <UserAvatar user={registerPreviewUser} size="md" />
+            <div>
+              <label className={`btn ${authSubmitting ? "disabled" : ""}`}>选择头像<input type="file" accept="image/*" disabled={authSubmitting} onChange={(event) => setAvatarFile(event.target.files?.[0] || null)} /></label>
+              <p className="muted">可选，不上传则显示昵称首字。</p>
+            </div>
+          </div>
+        )}
         {mode !== "reset" && <input type="password" placeholder="密码，至少 8 位" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} />}
         {mode !== "login" && <div className="code-row"><input placeholder="验证码" value={form.code} onChange={(event) => setForm({ ...form, code: event.target.value })} /><button type="button" className="btn" disabled={codeSending} aria-busy={codeSending} onClick={() => sendCode(mode === "register" ? "register" : "reset")}>{loadingText(codeSending, "发送验证码", "发送中...")}</button></div>}
         {mode === "reset" && <input type="password" placeholder="新密码" value={form.new_password} onChange={(event) => setForm({ ...form, new_password: event.target.value })} />}
@@ -2131,6 +2330,10 @@ function Notice({ message, type = "info" }) {
 function formatDate(value) {
   if (!value) return "-";
   return new Date(value).toLocaleDateString("zh-CN");
+}
+
+function formatMoney(value) {
+  return `¥${Number(value || 0).toFixed(2)}`;
 }
 
 function truncateText(value, maxLength) {
