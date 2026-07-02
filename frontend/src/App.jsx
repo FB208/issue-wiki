@@ -4,6 +4,7 @@ import { Link, NavLink, Route, Routes, useLocation, useNavigate, useParams } fro
 import MDEditor, { commands } from "@uiw/react-md-editor";
 import "@uiw/react-md-editor/markdown-editor.css";
 import "@uiw/react-markdown-preview/markdown.css";
+import rehypeRaw from "rehype-raw";
 import remarkGfm from "remark-gfm";
 
 import { request, setToken, toQuery, uploadFile } from "./api.js";
@@ -41,6 +42,7 @@ const pageSizeOptions = [10, 20, 50];
 const defaultSponsorAmount = "100";
 const sponsorAmountOptions = ["10", "50", "100", "1000"];
 const avatarColors = ["#2563eb", "#059669", "#7c3aed", "#db2777", "#ea580c", "#0891b2", "#4f46e5", "#16a34a"];
+const htmlMarkdownOptions = { remarkPlugins: [remarkGfm], rehypePlugins: [rehypeRaw] };
 
 function avatarInitial(nickname) {
   const text = String(nickname || "用户").trim();
@@ -512,7 +514,7 @@ function HomePage({ user, openAuth, paidAmount, sponsorRanking, refreshPaymentSu
     <>
       <section className="hero-card">
         <div className="hero-content">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{heroContent}</ReactMarkdown>
+          <ReactMarkdown {...htmlMarkdownOptions}>{heroContent}</ReactMarkdown>
         </div>
         <div className="hero-side">
           <div className="summary-grid">
@@ -1064,7 +1066,7 @@ function DocumentsPage({ nav, user, openAuth }) {
     <section className="doc-layout">
       <article className="panel doc-panel">
         <div className="doc-head"><div><span className="label">文档</span><h2>{doc.title}</h2><p>作者：{doc.author}，更新于 {formatDate(doc.updated_at)}</p></div><div className="row-actions"><button className="btn" disabled={liking || likedByMe} aria-busy={liking} onClick={like}>{loadingText(liking, `${likedByMe ? "已点赞" : "点赞"} ${doc.like_count}`, "处理中...")}</button><button className="btn primary" onClick={() => openReplyDrawer(null)}>回复</button></div></div>
-        <div className="markdown-body"><ReactMarkdown remarkPlugins={[remarkGfm]}>{doc.content}</ReactMarkdown></div>
+        <div className="markdown-body"><ReactMarkdown {...htmlMarkdownOptions}>{doc.content}</ReactMarkdown></div>
       </article>
       <section className="panel comments-panel document-comments-panel">
         <div className="panel-head"><h2>文档评论</h2><button className="btn" onClick={() => openReplyDrawer(null)}>发起评论</button></div>
@@ -1618,7 +1620,7 @@ function AdminPage({ user, openAuth, refreshNav }) {
       {tab === "home" && <div className="panel admin-panel">
         <div className="panel-head"><h2>Hero Card 内容编辑</h2></div>
         <form className="form" onSubmit={saveHeroContent}>
-          <MarkdownEditor value={heroContent} onChange={setHeroContent} user={user} openAuth={openAuth} />
+          <MarkdownEditor value={heroContent} onChange={setHeroContent} user={user} openAuth={openAuth} allowHtml />
           <button className="btn primary" disabled={busy("admin-save-hero")} aria-busy={busy("admin-save-hero")}>{loadingText(busy("admin-save-hero"), "保存首页内容", "保存中...")}</button>
         </form>
       </div>}
@@ -1683,7 +1685,7 @@ function AdminPage({ user, openAuth, refreshNav }) {
             </select>
             <input type="number" placeholder="排序值（留空自动）" value={docForm.sort_order} onChange={(event) => setDocForm({ ...docForm, sort_order: event.target.value })} />
           </div>
-          <MarkdownEditor value={docForm.content} onChange={(content) => setDocForm({ ...docForm, content })} user={user} openAuth={openAuth} fill />
+          <MarkdownEditor value={docForm.content} onChange={(content) => setDocForm({ ...docForm, content })} user={user} openAuth={openAuth} fill allowHtml />
           <div className="drawer-actions"><button type="button" className="btn" onClick={closeDocumentDrawer}>取消</button><button className="btn primary" disabled={busy(editingDocument ? `admin-update-document-${editingDocument.id}` : "admin-create-document") || !docForm.title.trim() || !docForm.content.trim()} aria-busy={busy(editingDocument ? `admin-update-document-${editingDocument.id}` : "admin-create-document")}>{loadingText(busy(editingDocument ? `admin-update-document-${editingDocument.id}` : "admin-create-document"), editingDocument ? "保存文档" : "创建文档", editingDocument ? "保存中..." : "创建中...")}</button></div>
         </form>
       </BottomDrawer>
@@ -2059,7 +2061,7 @@ function BottomDrawer({ title, open, height, setHeight, close, children }) {
   );
 }
 
-function MarkdownEditor({ value, onChange, user, openAuth, compact = false, fill = false }) {
+function MarkdownEditor({ value, onChange, user, openAuth, compact = false, fill = false, allowHtml = false }) {
   const [uploading, setUploading] = useState(false);
   const editorRef = useRef(null);
   const selectionRef = useRef(null);
@@ -2204,7 +2206,7 @@ function MarkdownEditor({ value, onChange, user, openAuth, compact = false, fill
           commands.checkedListCommand,
         ]}
         extraCommands={[commands.codeEdit, commands.codeLive, commands.codePreview, commands.fullscreen]}
-        previewOptions={{ remarkPlugins: [remarkGfm] }}
+        previewOptions={{ remarkPlugins: [remarkGfm], ...(allowHtml ? { rehypePlugins: [rehypeRaw] } : {}) }}
         textareaProps={{ placeholder: "输入 Markdown，或直接粘贴图片/文件上传", onPaste, onSelect: rememberSelection, onClick: rememberSelection, onKeyUp: rememberSelection }}
       />
     </div>

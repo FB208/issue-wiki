@@ -988,7 +988,11 @@ td small {
   max-width: 100%;
   height: auto;
   display: block;
-  border-radius: 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 14px;
+  padding: 4px;
+  background: #fff;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, .10);
 }
 
 .markdown-body pre, .wmde-markdown pre {
