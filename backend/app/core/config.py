@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 
     github_project_url: str = "https://github.com/example/project"
+    github_project_name: str = ""
     github_sync_enabled: bool = False
     github_token: str = ""
     github_webhook_secret: str = ""

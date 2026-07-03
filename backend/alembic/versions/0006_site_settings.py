@@ -39,7 +39,7 @@ def upgrade() -> None:
             {
                 "id": 1,
                 "logo_url": None,
-                "title": 易标投标工具箱",
+                "title": "易标投标工具箱",
                 "subtitle": "使用文档",
             }
         ],

@@ -323,6 +323,8 @@ class SiteBrandingOut(BaseModel):
     logo_url: str | None
     title: str
     subtitle: str
+    served_project_url: str | None = None
+    served_project_name: str | None = None
 
 
 class SiteBrandingUpdate(BaseModel):

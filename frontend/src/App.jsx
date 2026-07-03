@@ -232,7 +232,8 @@ function useToast() {
   return useContext(ToastContext);
 }
 
-const DEFAULT_BRANDING = { logo_url: null, title: "易标投标工具箱", subtitle: "使用文档" };
+const DEFAULT_BRANDING = { logo_url: null, title: "易标投标工具箱", subtitle: "使用文档", served_project_url: null, served_project_name: null };
+const SELF_PROJECT_URL = "https://github.com/FB208/issue-wiki";
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -356,6 +357,18 @@ function Layout({ children, nav, user, branding, logout, openAuth, openAuthorTip
           <div className="nav-label">文档</div>
           <DocumentTreeNav nav={nav} />
         </nav>
+        <div className="sidebar-footer">
+          <a className="repo-link" href={SELF_PROJECT_URL} target="_blank" rel="noopener noreferrer" title="本项目开源仓库">
+            <GithubIcon />
+            <span>本站开源仓库</span>
+          </a>
+          {brand.served_project_url ? (
+            <a className="repo-link" href={brand.served_project_url} target="_blank" rel="noopener noreferrer" title="本站服务的开源项目">
+              <GithubIcon />
+              <span>{brand.served_project_name || "服务的开源项目"}</span>
+            </a>
+          ) : null}
+        </div>
       </aside>
       {mobileOpen && <div className="overlay" onClick={() => setMobileOpen(false)} />}
       <main className="main">
@@ -369,6 +382,14 @@ function Layout({ children, nav, user, branding, logout, openAuth, openAuthorTip
         {children}
       </main>
     </div>
+  );
+}
+
+function GithubIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="currentColor">
+      <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z" />
+    </svg>
   );
 }
 
