@@ -1034,11 +1034,12 @@ td small {
   max-width: 100%;
   height: auto;
   display: block;
-  border: 1px solid var(--line);
+  margin: 16px 0;
+  border: 2px solid var(--line-strong);
   border-radius: var(--r-md);
   padding: 4px;
   background: #fff;
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-md);
 }
 
 .markdown-body pre, .wmde-markdown pre {
