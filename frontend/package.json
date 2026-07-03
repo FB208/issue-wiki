@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@fontsource-variable/inter": "^5.2.8",
     "@uiw/react-md-editor": "^4.1.1",
     "@vitejs/plugin-react": "latest",
     "react": "latest",
