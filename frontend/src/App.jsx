@@ -232,7 +232,7 @@ function useToast() {
   return useContext(ToastContext);
 }
 
-const DEFAULT_BRANDING = { logo_url: null, title: "Issue Wiki", subtitle: "开源任务控制台" };
+const DEFAULT_BRANDING = { logo_url: null, title: "易标投标工具箱", subtitle: "使用文档" };
 
 export default function App() {
   const [user, setUser] = useState(null);

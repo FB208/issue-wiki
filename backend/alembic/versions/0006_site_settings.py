@@ -39,8 +39,8 @@ def upgrade() -> None:
             {
                 "id": 1,
                 "logo_url": None,
-                "title": "Issue Wiki",
-                "subtitle": "开源任务控制台",
+                "title": 易标投标工具箱",
+                "subtitle": "使用文档",
             }
         ],
     )
