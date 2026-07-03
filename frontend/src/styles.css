@@ -25,6 +25,7 @@
   --control-height: 36px;
   --control-height-sm: 30px;
   --control-radius: 8px;
+  --content-max: 1180px;
   --r-sm: 6px;
   --r-md: 8px;
   --r-lg: 12px;
@@ -93,16 +94,6 @@ button:disabled { cursor: not-allowed; opacity: .62; }
 
 .brand b { display: block; }
 .brand span { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; }
-
-.search-box {
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
-  padding: 10px 12px;
-  color: var(--muted);
-  font-size: 13px;
-  margin-bottom: 18px;
-  background: var(--bg-subtle);
-}
 
 .nav-label {
   margin: 18px 0 8px 8px;
@@ -217,7 +208,16 @@ button:disabled { cursor: not-allowed; opacity: .62; }
 }
 
 .main {
-  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 28px clamp(20px, 4vw, 56px);
+}
+
+.main > * {
+  width: 100%;
+  max-width: var(--content-max);
+  margin-inline: auto;
 }
 
 .topbar {
@@ -225,7 +225,6 @@ button:disabled { cursor: not-allowed; opacity: .62; }
   justify-content: flex-end;
   align-items: center;
   gap: 16px;
-  margin-bottom: 14px;
 }
 
 .eyebrow, .muted {
@@ -440,7 +439,7 @@ button:disabled { cursor: not-allowed; opacity: .62; }
 
 .hero-card {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(420px, 520px);
+  grid-template-columns: minmax(0, 1.4fr) minmax(360px, 430px);
   align-items: start;
   gap: 24px;
   border: 1px solid var(--line);
@@ -448,7 +447,6 @@ button:disabled { cursor: not-allowed; opacity: .62; }
   background: var(--card);
   box-shadow: var(--shadow-sm);
   padding: 28px 30px;
-  margin-bottom: 16px;
   overflow: hidden;
 }
 
@@ -1055,6 +1053,7 @@ td small {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 18px;
+  max-width: 900px;
 }
 
 .doc-head {
@@ -1255,7 +1254,7 @@ td small {
 
 .task-detail-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 10px;
 }
 
@@ -1434,7 +1433,7 @@ td small {
 
 .task-meta-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 12px;
   padding: 20px 24px 0;
 }
@@ -1558,6 +1557,10 @@ td small {
 .sidebar-close, .mobile-menu { display: none; }
 .overlay { display: none; }
 
+@media (max-width: 1180px) {
+  .hero-card { grid-template-columns: 1fr; }
+}
+
 @media (max-width: 1060px) {
   .shell { grid-template-columns: 1fr; }
   .sidebar {
@@ -1585,11 +1588,10 @@ td small {
     box-shadow: var(--shadow-lg);
   }
   .overlay { display: block; position: fixed; inset: 0; z-index: 10; background: rgba(17,24,39,.35); }
-  .main { padding: 18px; }
+  .main { padding: 18px 16px; }
   .topbar, .hero-card, .doc-layout { grid-template-columns: 1fr; display: grid; }
   .top-actions { justify-content: start; }
   .summary-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .task-detail-grid, .task-meta-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 760px) {
@@ -1632,7 +1634,6 @@ td small {
     align-items: stretch;
   }
   .task-detail { padding: 16px; }
-  .task-detail-grid, .task-meta-grid { grid-template-columns: 1fr; }
   .detail-comment-head { display: grid; }
   .pagination {
     display: grid;

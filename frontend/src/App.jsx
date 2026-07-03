@@ -324,7 +324,6 @@ function Layout({ children, nav, user, logout, openAuth, openAuthorTip, mobileOp
           </div>
         </div>
         <button className="sidebar-close" onClick={() => setMobileOpen(false)}>关闭</button>
-        <div className="search-box">搜索、筛选和文档都在主内容区完成</div>
         <nav className="nav" onClick={() => setMobileOpen(false)}>
           <div className="nav-label">工作区</div>
           <NavLink to="/" end>赞助功能 <span className="badge">首页</span></NavLink>
