@@ -9,9 +9,10 @@ from app.api.documents import serialize_document
 from app.api.utils import next_sort_order, page_payload, paginate_query, serialize_task, serialize_task_with_metrics, task_metrics_query
 from app.dependencies import get_current_admin, get_db
 from app.models import Document, DocumentComment, DocumentFolder, GitHubSyncStatus, Like, LikeTarget, PaymentStatus, SponsorOrder, Task, TaskComment, TaskSource, TaskStatus, User, UserRole
-from app.schemas import AdminCommentOut, CommentAdminUpdate, CommentCreate, DocumentCreate, DocumentOut, DocumentUpdate, FolderCreate, FolderOut, FolderUpdate, GitHubSyncSummary, HomeHeroOut, HomeHeroUpdate, Page, ReorderItem, SponsorOrderOut, TaskCommentOut, TaskCreateAdmin, TaskOut, TaskUpdateAdmin, UserOut
+from app.schemas import AdminCommentOut, CommentAdminUpdate, CommentCreate, DocumentCreate, DocumentOut, DocumentUpdate, FolderCreate, FolderOut, FolderUpdate, GitHubSyncSummary, HomeHeroOut, HomeHeroUpdate, Page, ReorderItem, SiteBrandingOut, SiteBrandingUpdate, SponsorOrderOut, TaskCommentOut, TaskCreateAdmin, TaskOut, TaskUpdateAdmin, UserOut
 from app.services.github_sync import GitHubSyncError, delete_comment_from_github_background, sync_comment_to_github_background, sync_historical_issues, sync_task_to_github_background
 from app.services.home_hero import get_home_hero, save_home_hero
+from app.services.site_settings import get_site_settings, save_site_settings
 from app.services.task_ordering import normalize_task_sort_orders
 
 router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(get_current_admin)])
@@ -191,6 +192,16 @@ def admin_get_home_hero(db: Session = Depends(get_db)) -> HomeHeroOut:
 @router.put("/home-hero", response_model=HomeHeroOut)
 def admin_update_home_hero(payload: HomeHeroUpdate, db: Session = Depends(get_db)) -> HomeHeroOut:
     return save_home_hero(db, payload)
+
+
+@router.get("/site-settings", response_model=SiteBrandingOut)
+def admin_get_site_settings(db: Session = Depends(get_db)) -> SiteBrandingOut:
+    return get_site_settings(db)
+
+
+@router.put("/site-settings", response_model=SiteBrandingOut)
+def admin_update_site_settings(payload: SiteBrandingUpdate, db: Session = Depends(get_db)) -> SiteBrandingOut:
+    return save_site_settings(db, payload)
 
 
 @router.post("/github/sync-issues", response_model=GitHubSyncSummary)

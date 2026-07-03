@@ -232,11 +232,14 @@ function useToast() {
   return useContext(ToastContext);
 }
 
+const DEFAULT_BRANDING = { logo_url: null, title: "Issue Wiki", subtitle: "开源任务控制台" };
+
 export default function App() {
   const [user, setUser] = useState(null);
   const [nav, setNav] = useState({ folders: [], documents: [] });
   const [paymentSummary, setPaymentSummary] = useState({ paid_amount: "0" });
   const [sponsorRanking, setSponsorRanking] = useState([]);
+  const [branding, setBranding] = useState(DEFAULT_BRANDING);
   const [authOpen, setAuthOpen] = useState(false);
   const [authorTipOpen, setAuthorTipOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -278,12 +281,28 @@ export default function App() {
     await Promise.all([loadPaymentSummary(), loadSponsorRanking()]);
   }
 
+  async function loadBranding() {
+    try {
+      const result = await request("/site/branding");
+      setBranding({ ...DEFAULT_BRANDING, ...result });
+    } catch {
+      setBranding(DEFAULT_BRANDING);
+    }
+  }
+
   useEffect(() => {
     loadUser();
     loadNavigation();
     loadPaymentSummary();
     loadSponsorRanking();
+    loadBranding();
   }, []);
+
+  useEffect(() => {
+    const title = branding.title || DEFAULT_BRANDING.title;
+    const subtitle = (branding.subtitle || "").trim();
+    document.title = subtitle ? `${title} - ${subtitle}` : title;
+  }, [branding.title, branding.subtitle]);
 
   function logout() {
     setToken("");
@@ -292,7 +311,7 @@ export default function App() {
 
   return (
     <ToastProvider>
-      <Layout nav={nav} user={user} logout={logout} openAuth={() => setAuthOpen(true)} openAuthorTip={() => setAuthorTipOpen(true)} mobileOpen={mobileOpen} setMobileOpen={setMobileOpen}>
+      <Layout nav={nav} user={user} branding={branding} logout={logout} openAuth={() => setAuthOpen(true)} openAuthorTip={() => setAuthorTipOpen(true)} mobileOpen={mobileOpen} setMobileOpen={setMobileOpen}>
         <Routes>
           <Route path="/" element={<HomePage user={user} openAuth={() => setAuthOpen(true)} paidAmount={paymentSummary.paid_amount} sponsorRanking={sponsorRanking} refreshPaymentSummary={refreshSponsorData} />} />
           <Route path="/thanks" element={<SponsorThanksPage sponsorRanking={sponsorRanking} />} />
@@ -302,7 +321,7 @@ export default function App() {
           <Route path="/mine/tasks" element={<MinePage type="tasks" user={user} openAuth={() => setAuthOpen(true)} />} />
           <Route path="/mine/orders" element={<MinePage type="orders" user={user} openAuth={() => setAuthOpen(true)} />} />
           <Route path="/settings" element={<SettingsPage user={user} openAuth={() => setAuthOpen(true)} onUserUpdated={setUser} />} />
-          <Route path="/admin/*" element={<AdminPage user={user} openAuth={() => setAuthOpen(true)} refreshNav={loadNavigation} />} />
+          <Route path="/admin/*" element={<AdminPage user={user} openAuth={() => setAuthOpen(true)} refreshNav={loadNavigation} refreshBranding={loadBranding} />} />
         </Routes>
       </Layout>
       {authOpen && <AuthModal close={() => setAuthOpen(false)} onAuthed={loadUser} />}
@@ -311,16 +330,19 @@ export default function App() {
   );
 }
 
-function Layout({ children, nav, user, logout, openAuth, openAuthorTip, mobileOpen, setMobileOpen }) {
+function Layout({ children, nav, user, branding, logout, openAuth, openAuthorTip, mobileOpen, setMobileOpen }) {
+  const brand = branding || DEFAULT_BRANDING;
+  const logoSrc = brand.logo_url || "/logo.png";
+  const brandTitle = brand.title || DEFAULT_BRANDING.title;
   return (
     <div className="shell">
       <button className="mobile-menu" onClick={() => setMobileOpen(true)}>菜单</button>
       <aside className={`sidebar ${mobileOpen ? "open" : ""}`}>
         <div className="brand">
-          <img className="logo" src="/logo.png" alt="Issue Wiki" />
+          <img className="logo" src={logoSrc} alt={brandTitle} />
           <div>
-            <b>Issue Wiki</b>
-            <span>开源任务控制台</span>
+            <b>{brandTitle}</b>
+            {brand.subtitle ? <span>{brand.subtitle}</span> : null}
           </div>
         </div>
         <button className="sidebar-close" onClick={() => setMobileOpen(false)}>关闭</button>
@@ -1231,7 +1253,7 @@ function SettingsPage({ user, openAuth, onUserUpdated }) {
   );
 }
 
-function AdminPage({ user, openAuth, refreshNav }) {
+function AdminPage({ user, openAuth, refreshNav, refreshBranding }) {
   const location = useLocation();
   const navigate = useNavigate();
   const routeTab = location.pathname === "/admin/folders" ? "folders" : location.pathname === "/admin/documents" ? "documents" : "";
@@ -1254,6 +1276,9 @@ function AdminPage({ user, openAuth, refreshNav }) {
   });
   const [adminTaskFilters, setAdminTaskFilters] = useState(createDefaultAdminTaskFilters);
   const [heroContent, setHeroContent] = useState("");
+  const [siteForm, setSiteForm] = useState({ logo_url: "", title: "", subtitle: "" });
+  const [logoFile, setLogoFile] = useState(null);
+  const [logoPreview, setLogoPreview] = useState("");
   const [taskForm, setTaskForm] = useState(createDefaultTaskForm);
   const [editingTask, setEditingTask] = useState(null);
   const [taskDrawerOpen, setTaskDrawerOpen] = useState(false);
@@ -1277,6 +1302,16 @@ function AdminPage({ user, openAuth, refreshNav }) {
   const { busy, runBusy } = useBusyActions();
   const activePaging = adminPaging[tab] || defaultPageParams;
   const deferredAdminTaskName = useDeferredValue(adminTaskFilters.name);
+
+  useEffect(() => {
+    if (!logoFile) {
+      setLogoPreview("");
+      return undefined;
+    }
+    const previewUrl = URL.createObjectURL(logoFile);
+    setLogoPreview(previewUrl);
+    return () => URL.revokeObjectURL(previewUrl);
+  }, [logoFile]);
 
   function updateAdminPaging(key, patch) {
     setAdminPaging((current) => ({ ...current, [key]: { ...(current[key] || defaultPageParams), ...patch } }));
@@ -1444,6 +1479,11 @@ function AdminPage({ user, openAuth, refreshNav }) {
         const result = await request("/admin/home-hero");
         setHeroContent(result.content);
       }
+      if (tab === "settings") {
+        const result = await request("/admin/site-settings");
+        setSiteForm({ logo_url: result.logo_url || "", title: result.title || "", subtitle: result.subtitle || "" });
+        setLogoFile(null);
+      }
       setData(next);
     } finally {
       setAdminLoading(false);
@@ -1586,6 +1626,30 @@ function AdminPage({ user, openAuth, refreshNav }) {
     }).catch((err) => setError(err.message));
   }
 
+  async function saveSiteSettings(event) {
+    event.preventDefault();
+    setError("");
+    if (!siteForm.title.trim()) {
+      setError("平台标题不能为空");
+      return;
+    }
+    await runBusy("admin-save-site", async () => {
+      let logoUrl = siteForm.logo_url || null;
+      if (logoFile) {
+        const uploaded = await uploadFile(logoFile);
+        logoUrl = uploaded.url;
+      }
+      const result = await request("/admin/site-settings", {
+        method: "PUT",
+        body: JSON.stringify({ logo_url: logoUrl, title: siteForm.title.trim(), subtitle: siteForm.subtitle.trim() }),
+      });
+      setSiteForm({ logo_url: result.logo_url || "", title: result.title || "", subtitle: result.subtitle || "" });
+      setLogoFile(null);
+      if (refreshBranding) refreshBranding();
+      notify("平台设置已保存");
+    }).catch((err) => setError(err.message));
+  }
+
   async function updateUserStatus(item) {
     setError("");
     await runBusy(`admin-user-status-${item.id}`, async () => {
@@ -1612,7 +1676,7 @@ function AdminPage({ user, openAuth, refreshNav }) {
     <section className="admin-page">
       <div className="admin-tabs">
         {[
-          ["tasks", "任务管理"], ["home", "首页 Hero"], ["documents", "文档管理"], ["users", "用户管理"], ["comments", "评论管理"], ["orders", "订单管理"],
+          ["tasks", "任务管理"], ["home", "首页 Hero"], ["settings", "平台设置"], ["documents", "文档管理"], ["users", "用户管理"], ["comments", "评论管理"], ["orders", "订单管理"],
         ].map(([key, label]) => <button key={key} className={tab === key ? "active" : ""} disabled={adminLoading} onClick={() => switchAdminTab(key)}>{label}</button>)}
       </div>
       {error && <Notice type="error" message={error} />}
@@ -1621,6 +1685,24 @@ function AdminPage({ user, openAuth, refreshNav }) {
         <form className="form" onSubmit={saveHeroContent}>
           <MarkdownEditor value={heroContent} onChange={setHeroContent} user={user} openAuth={openAuth} allowHtml />
           <button className="btn primary" disabled={busy("admin-save-hero")} aria-busy={busy("admin-save-hero")}>{loadingText(busy("admin-save-hero"), "保存首页内容", "保存中...")}</button>
+        </form>
+      </div>}
+      {tab === "settings" && <div className="panel admin-panel">
+        <div className="panel-head"><div><h2>平台设置</h2><p>自定义左上角的 Logo、平台标题和二级标题。</p></div></div>
+        <form className="form" onSubmit={saveSiteSettings}>
+          <div className="avatar-editor">
+            <span className="brand-logo-preview"><img src={logoPreview || siteForm.logo_url || "/logo.png"} alt={siteForm.title || "Logo"} /></span>
+            <div>
+              <label className={`btn ${busy("admin-save-site") ? "disabled" : ""}`}>选择 Logo<input type="file" accept="image/*" disabled={busy("admin-save-site")} onChange={(event) => setLogoFile(event.target.files?.[0] || null)} /></label>
+              <button type="button" className="btn ghost" disabled={busy("admin-save-site")} onClick={() => { setLogoFile(null); setSiteForm((current) => ({ ...current, logo_url: "" })); }}>恢复默认 Logo</button>
+              <p className="muted">建议使用正方形图片；不设置时使用默认 Logo。</p>
+            </div>
+          </div>
+          <label className="field-label">平台标题</label>
+          <input placeholder="平台标题" value={siteForm.title} onChange={(event) => setSiteForm({ ...siteForm, title: event.target.value })} />
+          <label className="field-label">二级标题</label>
+          <input placeholder="二级标题（副标题，可留空）" value={siteForm.subtitle} onChange={(event) => setSiteForm({ ...siteForm, subtitle: event.target.value })} />
+          <button className="btn primary" disabled={busy("admin-save-site")} aria-busy={busy("admin-save-site")}>{loadingText(busy("admin-save-site"), "保存平台设置", "保存中...")}</button>
         </form>
       </div>}
       {tab === "tasks" && <div className="panel admin-panel">

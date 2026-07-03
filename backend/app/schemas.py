@@ -319,6 +319,18 @@ class HomeHeroUpdate(BaseModel):
     content: str = Field(min_length=1)
 
 
+class SiteBrandingOut(BaseModel):
+    logo_url: str | None
+    title: str
+    subtitle: str
+
+
+class SiteBrandingUpdate(BaseModel):
+    logo_url: str | None = None
+    title: str = Field(min_length=1, max_length=120)
+    subtitle: str = Field(default="", max_length=200)
+
+
 class UploadOut(OrmModel):
     id: int
     original_filename: str
