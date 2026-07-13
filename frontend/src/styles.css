@@ -914,6 +914,13 @@ td small {
   border-bottom: 1px solid var(--line);
 }
 
+.modal.sticky-header .modal-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #fff;
+}
+
 .modal-head h2 { margin: 0; }
 .modal-head button,
 .drawer-head button {

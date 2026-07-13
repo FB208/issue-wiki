@@ -1973,7 +1973,7 @@ function TaskDetailModal({ task, commentsPage, loading, user, openAuth, close, o
   }
 
   return (
-    <Modal title={`任务详情：${task.name}`} close={close} actions={<button onClick={() => onEdit(task)}>编辑</button>} wide>
+    <Modal title={`任务详情：${task.name}`} close={close} actions={<button onClick={() => onEdit(task)}>编辑</button>} wide stickyHeader>
       <div className="task-detail">
         <div className="task-detail-grid">
           <DetailItem label="状态" value={task.status_label} />
@@ -2419,13 +2419,13 @@ function Gate({ openAuth }) {
   return <section className="panel"><div className="empty">需要登录后查看。<button className="btn primary" onClick={openAuth}>立即登录</button></div></section>;
 }
 
-function Modal({ title, close, children, wide = false, actions = null }) {
+function Modal({ title, close, children, wide = false, actions = null, stickyHeader = false }) {
   const modalRef = useRef(null);
   const handleKeyDown = useOverlayFocus(modalRef, close);
   return (
     <div className="modal-backdrop">
       <div
-        className={`modal ${wide ? "wide" : ""}`}
+        className={`modal${wide ? " wide" : ""}${stickyHeader ? " sticky-header" : ""}`}
         ref={modalRef}
         tabIndex={-1}
         role="dialog"
