@@ -17,6 +17,7 @@
     "react-markdown": "latest",
     "react-router-dom": "latest",
     "rehype-raw": "^7.0.0",
+    "rehype-sanitize": "^6.0.0",
     "remark-gfm": "latest",
     "vite": "latest"
   }

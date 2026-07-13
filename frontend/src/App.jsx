@@ -5,6 +5,7 @@ import MDEditor, { commands } from "@uiw/react-md-editor";
 import "@uiw/react-md-editor/markdown-editor.css";
 import "@uiw/react-markdown-preview/markdown.css";
 import rehypeRaw from "rehype-raw";
+import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 
 import { request, setToken, toQuery, uploadFile } from "./api.js";
@@ -43,6 +44,7 @@ const defaultSponsorAmount = "100";
 const sponsorAmountOptions = ["10", "50", "100", "1000"];
 const avatarColors = ["#2563eb", "#059669", "#7c3aed", "#db2777", "#ea580c", "#0891b2", "#4f46e5", "#16a34a"];
 const htmlMarkdownOptions = { remarkPlugins: [remarkGfm], rehypePlugins: [rehypeRaw] };
+const safeHtmlMarkdownOptions = { remarkPlugins: [remarkGfm], rehypePlugins: [rehypeRaw, rehypeSanitize] };
 
 function avatarInitial(nickname) {
   const text = String(nickname || "用户").trim();
@@ -992,7 +994,7 @@ function TaskDetailPage({ user, openAuth }) {
             <DetailItem label="排序" value={task.sort_order} />
           </div>
           {completed && <Notice message="已完成任务不能继续共创，但仍可赞助。" />}
-          <div className="markdown-body task-page-body"><ReactMarkdown remarkPlugins={[remarkGfm]}>{task.description || "暂无描述"}</ReactMarkdown></div>
+          <div className="markdown-body task-page-body"><ReactMarkdown {...safeHtmlMarkdownOptions}>{task.description || "暂无描述"}</ReactMarkdown></div>
         </article>
         <section className="panel comments-panel document-comments-panel">
           <div className="panel-head"><h2>共创评论</h2><button className="btn" disabled={completed} onClick={openReplyDrawer}>{completed ? "已完成" : "发起评论"}</button></div>
@@ -1989,7 +1991,7 @@ function TaskDetailModal({ task, commentsPage, loading, user, openAuth, close, o
         <section className="task-detail-section">
           <h3>任务描述</h3>
           <div className="task-detail-markdown markdown-body">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{task.description || "暂无描述"}</ReactMarkdown>
+            <ReactMarkdown {...safeHtmlMarkdownOptions}>{task.description || "暂无描述"}</ReactMarkdown>
           </div>
         </section>
         <section className="task-detail-section">
@@ -2024,7 +2026,7 @@ function TaskDetailComment({ item }) {
         {item.github_comment_id && <span className="source-chip">GitHub #{item.github_comment_id}</span>}
       </div>
       <div className="detail-comment-body">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{item.content || "暂无内容"}</ReactMarkdown>
+        <ReactMarkdown {...safeHtmlMarkdownOptions}>{item.content || "暂无内容"}</ReactMarkdown>
       </div>
       {item.admin_reply && <blockquote>管理员回复：{item.admin_reply}</blockquote>}
       {item.github_sync_error && <Notice type="error" message={item.github_sync_error} />}
@@ -2308,7 +2310,7 @@ function MarkdownEditor({ value, onChange, user, openAuth, compact = false, fill
           commands.checkedListCommand,
         ]}
         extraCommands={[commands.codeEdit, commands.codeLive, commands.codePreview, commands.fullscreen]}
-        previewOptions={{ remarkPlugins: [remarkGfm], ...(allowHtml ? { rehypePlugins: [rehypeRaw] } : {}) }}
+        previewOptions={allowHtml ? htmlMarkdownOptions : safeHtmlMarkdownOptions}
         textareaProps={{ placeholder: "输入 Markdown，或直接粘贴图片/文件上传", onPaste, onSelect: rememberSelection, onClick: rememberSelection, onKeyUp: rememberSelection }}
       />
     </div>
@@ -2410,7 +2412,7 @@ function Comment({ item }) {
 }
 
 function CommentMarkdown({ content }) {
-  return <div className="comment-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{content || ""}</ReactMarkdown></div>;
+  return <div className="comment-markdown"><ReactMarkdown {...safeHtmlMarkdownOptions}>{content || ""}</ReactMarkdown></div>;
 }
 
 function Gate({ openAuth }) {
