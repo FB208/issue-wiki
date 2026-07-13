@@ -227,3 +227,7 @@ frontend/dist/
 .env.*.local
 *.local
 .vscode/.runtime.env
+
+# Project skill credentials and local synchronization state
+.agents/skills/sync-user-manual/.env.local
+.agents/skills/sync-user-manual/.sync-state.local.json

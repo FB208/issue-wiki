@@ -1,0 +1,4 @@
+interface:
+  display_name: "同步使用说明"
+  short_description: "安全预览并同步使用说明文档、文件夹与引用图片到部署网站"
+  default_prompt: "使用 $sync-user-manual 预览并同步本项目的使用说明到部署网站。"
