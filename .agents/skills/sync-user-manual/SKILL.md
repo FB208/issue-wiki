@@ -33,13 +33,14 @@ Synchronize `使用说明/` with the deployed issue-wiki website through the det
 - Never print passwords, bearer tokens, or authorization headers.
 - Never delete remote documents, folders, uploads, comments, or likes.
 - Stop before writes when local validation or remote duplicate detection fails.
-- Keep `.env.local` and `.sync-state.local.json` untracked.
+- Keep `.env.local` and the repository-root `.sync-user-manual-state.local.json` untracked.
 - Do not contact a production deployment while developing or testing this skill unless the user explicitly requests it.
 
 ## Deterministic Behavior
 
 - Map directories below `使用说明/` to website folders; do not create a `使用说明` wrapper folder or image-only folders.
 - Match a document by normalized target folder path plus its complete filename stem.
-- Preserve unrelated remote content. Synchronize only matched items' content and ordering.
+- Preserve unrelated remote content and existing website folder ordering. Never compare or update folder `sort_order`.
+- Omit folder `sort_order` when creating a missing folder so the website assigns its position. Synchronize only matched documents' content and ordering.
 - Upload only referenced local JPG, JPEG, PNG, GIF, or WebP files. Reuse URLs by SHA-256 from the local state file.
 - Leave remote, absolute-site, data, and anchor image URLs unchanged.

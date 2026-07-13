@@ -26,6 +26,11 @@ MAX_IMAGE_SIZE = 10 * 1024 * 1024
 PAGE_SIZE = 100
 DEFAULT_AUTHOR = "生产力Mark"
 STATE_VERSION = 1
+DEFAULT_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/138.0.0.0 Safari/537.36"
+)
 
 
 class SyncError(Exception):
@@ -373,7 +378,7 @@ class ApiClient:
         body: bytes | None = None,
         content_type: str | None = None,
     ) -> Any:
-        headers = {"Accept": "application/json"}
+        headers = {"Accept": "application/json", "User-Agent": DEFAULT_USER_AGENT}
         if self.token:
             headers["Authorization"] = "Bearer " + self.token
         if payload is not None:
@@ -495,7 +500,6 @@ def build_remote_index(folders: list[dict[str, Any]], documents: list[dict[str, 
 @dataclass
 class Preview:
     folders_create: int = 0
-    folders_update: int = 0
     folders_skip: int = 0
     documents_create: int = 0
     documents_update: int = 0
@@ -552,9 +556,6 @@ class SyncRunner:
             if existing is None:
                 result.folders_create += 1
                 result.details.append("创建文件夹 " + "/".join(folder.parts))
-            elif existing.get("sort_order") != folder.sort_order:
-                result.folders_update += 1
-                result.details.append("更新文件夹排序 " + "/".join(folder.parts))
             else:
                 result.folders_skip += 1
         for document in self.catalog.documents:
@@ -596,7 +597,7 @@ class SyncRunner:
             existing = self.existing_folder(folder.parts)
             if existing is None:
                 created = self.client.request(
-                    "POST", "/admin/folders", {"name": folder.parts[-1], "parent_id": parent_id, "sort_order": folder.sort_order}
+                    "POST", "/admin/folders", {"name": folder.parts[-1], "parent_id": parent_id}
                 )
                 if not isinstance(created, dict) or not isinstance(created.get("id"), int):
                     raise ApiError("创建文件夹响应无效：" + "/".join(folder.parts))
@@ -604,13 +605,6 @@ class SyncRunner:
                 self.remote.folders_by_path[self.path_key(folder.parts)] = [created]
                 result.folders_create += 1
                 result.details.append("创建文件夹 " + "/".join(folder.parts))
-            elif existing.get("sort_order") != folder.sort_order:
-                updated = self.client.request("PUT", f"/admin/folders/{existing['id']}", {"sort_order": folder.sort_order})
-                if isinstance(updated, dict):
-                    existing = updated
-                    self.remote.folders_by_path[self.path_key(folder.parts)] = [updated]
-                result.folders_update += 1
-                result.details.append("更新文件夹排序 " + "/".join(folder.parts))
             else:
                 result.folders_skip += 1
             folder_ids[folder.parts] = existing["id"]
@@ -649,7 +643,7 @@ def print_summary(mode: str, catalog: LocalCatalog, result: Preview) -> None:
     print(f"{mode}完成：本地文档 {len(catalog.documents)}，文件夹 {len(catalog.folders)}，引用图片 {len(catalog.assets)}")
     print(
         "图片：上传 {0.images_upload}，复用 {0.images_reuse}；"
-        "文件夹：创建 {0.folders_create}，更新 {0.folders_update}，跳过 {0.folders_skip}；"
+        "文件夹：创建 {0.folders_create}，跳过 {0.folders_skip}；"
         "文档：创建 {0.documents_create}，更新 {0.documents_update}，跳过 {0.documents_skip}".format(result)
     )
     for detail in result.details:
@@ -658,6 +652,10 @@ def print_summary(mode: str, catalog: LocalCatalog, result: Preview) -> None:
 
 def repository_root() -> Path:
     return Path(__file__).resolve().parents[4]
+
+
+def state_path() -> Path:
+    return repository_root() / ".sync-user-manual-state.local.json"
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -671,7 +669,7 @@ def main(argv: list[str] | None = None) -> int:
     skill_root = Path(__file__).resolve().parents[1]
     try:
         config = Config.load(skill_root / ".env.local")
-        runner = SyncRunner(config, repository_root() / "使用说明", skill_root / ".sync-state.local.json", ApiClient(config))
+        runner = SyncRunner(config, repository_root() / "使用说明", state_path(), ApiClient(config))
         result = runner.apply() if args.apply else runner.preview()
         print_summary("正式同步" if args.apply else "预览", runner.catalog, result)
         if not args.apply:

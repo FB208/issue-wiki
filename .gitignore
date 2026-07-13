@@ -231,3 +231,4 @@ frontend/dist/
 # Project skill credentials and local synchronization state
 .agents/skills/sync-user-manual/.env.local
 .agents/skills/sync-user-manual/.sync-state.local.json
+/.sync-user-manual-state.local.json

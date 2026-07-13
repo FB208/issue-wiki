@@ -105,6 +105,21 @@ class SyncFixture(unittest.TestCase):
         self.assertEqual(second.documents_skip, 1)
         self.assertEqual(len(client.writes), writes_after_first)
 
+    def test_existing_folder_order_is_preserved(self):
+        client = FakeClient(
+            folders=[{"id": 7, "name": "配置", "parent_id": None, "sort_order": 999}]
+        )
+        preview = self.runner(client).preview()
+        self.assertEqual(preview.folders_create, 0)
+        self.assertEqual(preview.folders_skip, 1)
+        self.assertEqual(client.writes, [])
+
+        result = self.runner(client).apply()
+        self.assertEqual(result.folders_create, 0)
+        self.assertEqual(result.folders_skip, 1)
+        self.assertNotIn(("PUT", "/admin/folders/7"), client.writes)
+        self.assertEqual(client.folders[0]["sort_order"], 999)
+
     def test_markdown_change_updates_only_document(self):
         client = FakeClient()
         self.runner(client).apply()
@@ -178,7 +193,9 @@ class LocalApiHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_POST(self):
-        self.__class__.calls.append(("POST", self.path, self.headers.get("Authorization")))
+        self.__class__.calls.append(
+            ("POST", self.path, self.headers.get("Authorization"), self.headers.get("User-Agent"))
+        )
         length = int(self.headers.get("Content-Length", "0"))
         self.rfile.read(length)
         if self.path == "/api/auth/login":
@@ -187,7 +204,9 @@ class LocalApiHandler(BaseHTTPRequestHandler):
             self._json(404, {"detail": "not found"})
 
     def do_GET(self):
-        self.__class__.calls.append(("GET", self.path, self.headers.get("Authorization")))
+        self.__class__.calls.append(
+            ("GET", self.path, self.headers.get("Authorization"), self.headers.get("User-Agent"))
+        )
         if self.path.startswith("/api/admin/folders"):
             self._json(200, {"items": [], "page": 1, "page_size": 100, "pages": 1, "total": 0})
         else:
@@ -213,6 +232,7 @@ class ApiClientTests(unittest.TestCase):
             thread.join(timeout=2)
         self.assertEqual(LocalApiHandler.calls[0][0:2], ("POST", "/api/auth/login"))
         self.assertIsNone(LocalApiHandler.calls[0][2])
+        self.assertEqual(LocalApiHandler.calls[0][3], sync.DEFAULT_USER_AGENT)
         self.assertEqual(LocalApiHandler.calls[1][2], "Bearer secret-token")
 
 
@@ -223,6 +243,7 @@ class RepositoryCorpusTests(unittest.TestCase):
         self.assertEqual(len(catalog.documents), 10)
         self.assertEqual(len(catalog.folders), 2)
         self.assertEqual(len(catalog.assets), 14)
+        self.assertEqual(sync.state_path(), repository / ".sync-user-manual-state.local.json")
 
 
 if __name__ == "__main__":
